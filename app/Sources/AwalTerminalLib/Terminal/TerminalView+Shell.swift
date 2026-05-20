@@ -25,48 +25,142 @@ extension TerminalView {
         setupPtyReader()
     }
 
-    /// Execute a hook script synchronously in a subprocess.
+    /// Execute a hook script synchronously in a sandboxed subprocess.
     func executeHookScript(_ scriptURL: URL, workingDir: String?) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [scriptURL.path]
-        if let dir = workingDir {
-            process.currentDirectoryURL = URL(fileURLWithPath: dir)
-        }
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            os_log(.error, log: hookLog, "Pre-session hook failed: %{public}@ — %{public}@",
-                   scriptURL.lastPathComponent, error.localizedDescription)
-        }
+        runSandboxedHook(scriptURL, workingDir: workingDir)
     }
 
-    /// Execute post-session hooks asynchronously.
+    /// Execute post-session hooks asynchronously in sandboxed subprocesses.
     func executePostSessionHooks() {
         guard !postSessionHooks.isEmpty else { return }
         let hooks = postSessionHooks
         let dir = lastWorkingDir
         postSessionHooks = []
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             for hookURL in hooks {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/bash")
-                process.arguments = [hookURL.path]
-                if let dir = dir {
-                    process.currentDirectoryURL = URL(fileURLWithPath: dir)
+                self?.runSandboxedHook(hookURL, workingDir: dir)
+            }
+        }
+    }
+
+    // MARK: - Sandboxed Hook Execution
+
+    @discardableResult
+    private func runSandboxedHook(_ scriptURL: URL, workingDir: String?) -> Int32 {
+        let dir = workingDir ?? FileManager.default.temporaryDirectory.path
+
+        // Allowlist: only printable ASCII (0x20-0x7E) excluding ", (, ), \
+        let pathIsValid: (String) -> Bool = { path in
+            path.utf8.allSatisfy { byte in
+                byte >= 0x20 && byte <= 0x7E
+                    && byte != 0x22 && byte != 0x28 && byte != 0x29 && byte != 0x5C
+            }
+        }
+
+        if !pathIsValid(dir) {
+            os_log(.error, log: hookLog, "Hook rejected: working dir contains unsafe characters: %{public}@", dir)
+            logHookAudit(scriptURL, entry: "SANDBOX_DENIED", detail: "unsafe workingDir path")
+            return -1
+        }
+
+        // TOCTOU mitigation: copy hook to a secure staging directory
+        let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let stagedScript: URL
+        do {
+            try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+            stagedScript = stagingDir.appendingPathComponent(scriptURL.lastPathComponent)
+            try FileManager.default.copyItem(at: scriptURL, to: stagedScript)
+        } catch {
+            os_log(.error, log: hookLog, "Hook staging failed: %{public}@", error.localizedDescription)
+            logHookAudit(scriptURL, entry: "SANDBOX_DENIED", detail: "staging failed: \(error.localizedDescription)")
+            try? FileManager.default.removeItem(at: stagingDir)
+            return -1
+        }
+
+        defer { try? FileManager.default.removeItem(at: stagingDir) }
+
+        let profile = """
+            (version 1)
+            (deny default)
+            (allow process*)
+            (allow file-read-metadata)
+            (allow file-read* (subpath "/private/tmp"))
+            (allow file-read* (subpath "\(dir)"))
+            (allow file-read* (literal "\(stagedScript.path)"))
+            (allow file-read* (subpath "/usr"))
+            (allow file-read* (subpath "/bin"))
+            (allow file-read* (subpath "/Library"))
+            (allow file-read* (subpath "/System"))
+            (allow file-write* (subpath "/private/tmp"))
+            (allow file-write* (subpath "\(dir)"))
+            (allow sysctl-read)
+            (allow mach-lookup)
+            """
+
+        let stderrPipe = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
+        process.arguments = ["-p", profile, "/bin/bash", "--", stagedScript.path]
+        process.currentDirectoryURL = URL(fileURLWithPath: dir)
+
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = stderrPipe
+
+        let start = DispatchTime.now()
+        do {
+            try process.run()
+        } catch {
+            os_log(.error, log: hookLog, "Hook launch failed: %{public}@ — %{public}@",
+                   scriptURL.lastPathComponent, error.localizedDescription)
+            logHookAudit(scriptURL, entry: "SANDBOX_DENIED", detail: error.localizedDescription)
+            return -1
+        }
+
+        let timeout = AppConfig.shared.aiComponentsHookTimeout
+        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(timeout)) {
+            if process.isRunning { process.terminate() }
+        }
+        process.waitUntilExit()
+
+        // Capture stderr output (capped at 4KB)
+        let maxOutput = 4096
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let outputTruncated = stderrData.count > maxOutput
+        let capturedOutput = String(data: stderrData.prefix(maxOutput), encoding: .utf8) ?? ""
+
+        let elapsed = Int((DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000)
+        let timedOut = process.terminationReason == .uncaughtSignal && elapsed >= timeout * 1000
+        let code = process.terminationStatus
+
+        let outputSuffix = capturedOutput.isEmpty ? "" : " stderr=\(capturedOutput)\(outputTruncated ? "…[truncated]" : "")"
+
+        if timedOut {
+            os_log(.error, log: hookLog, "Hook timed out: %{public}@ killed after %ds", scriptURL.lastPathComponent, timeout)
+            logHookAudit(scriptURL, entry: "TIMEOUT", detail: "killed after \(timeout)s\(outputSuffix)")
+        } else {
+            os_log(.info, log: hookLog, "Hook executed: %{public}@ exit=%d duration=%dms", scriptURL.lastPathComponent, code, elapsed)
+            logHookAudit(scriptURL, entry: "EXECUTED", detail: "exit=\(code) duration=\(elapsed)ms\(outputSuffix)")
+        }
+
+        return code
+    }
+
+    private func logHookAudit(_ scriptURL: URL, entry: String, detail: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "\(timestamp) \(entry) \(scriptURL.lastPathComponent) \(detail)\n"
+        let logFile = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/awal/hook-audit.log")
+        let logDir = logFile.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        if let data = line.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logFile.path) {
+                if let handle = try? FileHandle(forWritingTo: logFile) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
                 }
-                process.standardOutput = FileHandle.nullDevice
-                process.standardError = FileHandle.nullDevice
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                } catch {
-                    os_log(.error, log: hookLog, "Post-session hook failed: %{public}@ — %{public}@",
-                           hookURL.lastPathComponent, error.localizedDescription)
-                }
+            } else {
+                try? data.write(to: logFile)
             }
         }
     }

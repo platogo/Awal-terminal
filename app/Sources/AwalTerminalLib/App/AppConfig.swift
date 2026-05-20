@@ -98,6 +98,7 @@ struct AppConfig {
     var aiComponentsSecurityScan: Bool = true
     var aiComponentsBlockCritical: Bool = true
     var aiComponentsRequireHookApproval: Bool = true
+    var aiComponentsHookTimeout: Int = 30  // seconds
     var aiComponentsCustomSecurityRules: [CustomSecurityRule] = []
     var aiComponentsDisabledRules: Set<String> = []
 
@@ -252,6 +253,7 @@ struct AppConfig {
         if let v = parsed["ai_components.security_scan"] { config.aiComponentsSecurityScan = v == "true" }
         if let v = parsed["ai_components.block_critical"] { config.aiComponentsBlockCritical = v == "true" }
         if let v = parsed["ai_components.require_hook_approval"] { config.aiComponentsRequireHookApproval = v == "true" }
+        if let v = parsed["ai_components.hook_timeout"], let n = Int(v) { config.aiComponentsHookTimeout = max(1, min(n, 600)) }
 
         // Disabled built-in rules
         if let v = parsed["ai_components.disabled_rules"] {
