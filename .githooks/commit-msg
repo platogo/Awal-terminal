@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+msg_file="$1"
+first_line=$(head -n1 "$msg_file")
+
+if [ -z "$first_line" ]; then
+  echo "ERROR: Commit message first line is empty"
+  exit 1
+fi
+
+if [ ${#first_line} -gt 72 ]; then
+  echo "ERROR: Commit message first line exceeds 72 characters (${#first_line})"
+  exit 1
+fi
+
+if ! echo "$first_line" | grep -qE '^(feat|fix|chore|docs|refactor|test|style|ci):' && ! echo "$first_line" | grep -qE '^[a-z]'; then
+  echo "ERROR: First line must start with lowercase or a conventional prefix (feat:, fix:, etc.)"
+  exit 1
+fi
+
+if echo "$first_line" | grep -qiE '\bAI\b|Claude|LLM|GPT|Co-Authored-By'; then
+  echo "ERROR: Commit message must not contain AI, Claude, LLM, GPT, or Co-Authored-By"
+  exit 1
+fi

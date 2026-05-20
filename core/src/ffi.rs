@@ -171,7 +171,7 @@ pub extern "C" fn at_surface_spawn_shell(
             0
         }
         Err(e) => {
-            eprintln!("Failed to spawn shell: {}", e);
+            eprintln!("Failed to spawn shell: {e}");
             -1
         }
     }
@@ -213,7 +213,7 @@ pub extern "C" fn at_surface_spawn_command(
             0
         }
         Err(e) => {
-            eprintln!("Failed to spawn command: {}", e);
+            eprintln!("Failed to spawn command: {e}");
             -1
         }
     }

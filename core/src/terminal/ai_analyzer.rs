@@ -106,7 +106,7 @@ impl AiAnalyzer {
     fn build_tool_patterns(names: &[String]) -> Vec<(String, String)> {
         names
             .iter()
-            .map(|n| (format!("{}(", n), format!("{} (", n)))
+            .map(|n| (format!("{n}("), format!("{n} (")))
             .collect()
     }
 

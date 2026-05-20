@@ -102,7 +102,7 @@ impl Pty {
                     Err(_) => unsafe { libc::_exit(1) },
                 };
                 let base = shell.rsplit('/').next().unwrap_or(shell);
-                let login_arg = match CString::new(format!("-{}", base)) {
+                let login_arg = match CString::new(format!("-{base}")) {
                     Ok(s) => s,
                     Err(_) => unsafe { libc::_exit(1) },
                 };
