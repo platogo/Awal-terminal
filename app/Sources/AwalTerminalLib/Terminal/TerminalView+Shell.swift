@@ -48,6 +48,15 @@ extension TerminalView {
     @discardableResult
     private func runSandboxedHook(_ scriptURL: URL, workingDir: String?) -> Int32 {
         let dir = workingDir ?? FileManager.default.temporaryDirectory.path
+
+        // Reject paths that could inject sandbox profile directives
+        let invalidChars = CharacterSet(charactersIn: "\")(")
+        if dir.rangeOfCharacter(from: invalidChars) != nil {
+            os_log(.error, log: hookLog, "Hook rejected: working dir contains unsafe characters: %{public}@", dir)
+            logHookAudit(scriptURL, entry: "SANDBOX_DENIED", detail: "unsafe workingDir path")
+            return -1
+        }
+
         let profile = """
             (version 1)
             (deny default)
@@ -64,9 +73,8 @@ extension TerminalView {
         process.arguments = ["-p", profile, "/bin/bash", scriptURL.path]
         process.currentDirectoryURL = URL(fileURLWithPath: dir)
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
 
         let start = DispatchTime.now()
         do {
