@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+branch=$(git branch --show-current)
+
+if ! echo "$branch" | grep -qE '^(main|(feat|fix|chore|docs|refactor|release)/.+)$'; then
+  echo "ERROR: Branch '$branch' does not match allowed patterns: main, feat/*, fix/*, chore/*, docs/*, refactor/*, release/*"
+  exit 1
+fi

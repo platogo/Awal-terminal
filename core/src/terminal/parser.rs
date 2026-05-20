@@ -255,8 +255,7 @@ impl<'a> vte::Perform for ScreenPerformer<'a> {
                 } else if intermediates.contains(&b'?') {
                     // CSI ? u — Query kitty keyboard flags
                     let flags = self.screen.modes.kitty_keyboard_flags();
-                    self.responses
-                        .push(format!("\x1b[?{}u", flags).into_bytes());
+                    self.responses.push(format!("\x1b[?{flags}u").into_bytes());
                 } else {
                     self.screen.restore_cursor();
                 }
@@ -287,8 +286,7 @@ impl<'a> vte::Perform for ScreenPerformer<'a> {
                         // Cursor position report (1-indexed)
                         let r = self.screen.cursor.row + 1;
                         let c = self.screen.cursor.col + 1;
-                        self.responses
-                            .push(format!("\x1b[{};{}R", r, c).into_bytes());
+                        self.responses.push(format!("\x1b[{r};{c}R").into_bytes());
                     }
                     _ => {}
                 }

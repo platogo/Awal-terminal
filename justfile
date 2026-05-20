@@ -62,7 +62,7 @@ fmt:
 
 # Lint
 lint:
-    cd {{core_dir}} && cargo clippy -- -W warnings
+    cd {{core_dir}} && cargo clippy -- -D warnings
 
 # Build the Rust core library for both architectures (universal)
 build-core-universal:

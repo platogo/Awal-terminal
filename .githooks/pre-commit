@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+echo "Running cargo fmt --check..."
+(cd core && cargo fmt --check)
+
+echo "Running cargo clippy..."
+(cd core && cargo clippy -- -D warnings)
