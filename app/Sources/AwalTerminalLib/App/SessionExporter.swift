@@ -107,7 +107,8 @@ class SessionExporter {
     ) {
         let fileProperties: [CFString: Any] = [
             kCGImagePropertyGIFDictionary: [
-                kCGImagePropertyGIFLoopCount: 0  // Loop forever
+                kCGImagePropertyGIFLoopCount: 0,  // Loop forever
+                "GIFComment" as CFString: "⚠️ WARNING: This recording may contain sensitive information (API keys, passwords, tokens). Review before sharing. Exported by Awal Terminal.",
             ]
         ]
 
