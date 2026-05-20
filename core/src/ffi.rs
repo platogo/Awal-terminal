@@ -8,51 +8,25 @@ use std::ffi::CString;
 use std::os::fd::RawFd;
 use std::os::raw::c_char;
 use std::slice;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Debug-only thread safety check for FFI entry points.
-/// Tracks the thread that first calls an FFI function on a surface and asserts
-/// all subsequent calls come from the same thread.
-#[cfg(debug_assertions)]
-mod thread_check {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use std::thread::ThreadId;
+fn current_thread_id() -> u64 {
+    unsafe { libc::pthread_self() as u64 }
+}
 
-    static SURFACE_THREADS: Mutex<Option<HashMap<usize, ThreadId>>> = Mutex::new(None);
-
-    pub fn assert_same_thread(surface_ptr: usize) {
-        let current = std::thread::current().id();
-        let mut guard = SURFACE_THREADS.lock().unwrap();
-        let map = guard.get_or_insert_with(HashMap::new);
-        if let Some(&expected) = map.get(&surface_ptr) {
-            assert_eq!(
-                current, expected,
-                "FFI thread safety violation: ATSurface called from different thread"
+macro_rules! check_ffi_thread {
+    ($ptr:expr) => {{
+        let surface = unsafe { &*$ptr };
+        let expected = surface.owner_thread.load(Ordering::Relaxed);
+        let current = current_thread_id();
+        if current != expected {
+            eprintln!(
+                "FATAL: FFI thread safety violation — ATSurface called from thread {} but owned by {}",
+                current, expected
             );
-        } else {
-            map.insert(surface_ptr, current);
+            std::process::abort();
         }
-    }
-
-    pub fn remove(surface_ptr: usize) {
-        if let Ok(mut guard) = SURFACE_THREADS.lock() {
-            if let Some(map) = guard.as_mut() {
-                map.remove(&surface_ptr);
-            }
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-macro_rules! check_ffi_thread {
-    ($ptr:expr) => {
-        thread_check::assert_same_thread($ptr as usize);
-    };
-}
-
-#[cfg(not(debug_assertions))]
-macro_rules! check_ffi_thread {
-    ($ptr:expr) => {};
+    }};
 }
 
 /// Opaque handle to a terminal surface.
@@ -66,6 +40,7 @@ pub struct ATSurface {
     default_fg: (u8, u8, u8),
     default_bg: (u8, u8, u8),
     write_queue: WriteQueue,
+    owner_thread: AtomicU64,
 }
 
 /// Helper: safely convert a nullable const pointer to a reference, returning $default on null.
@@ -117,6 +92,7 @@ pub extern "C" fn at_surface_new(cols: u32, rows: u32) -> *mut ATSurface {
         default_fg: (229, 229, 229),
         default_bg: (30, 30, 30),
         write_queue: WriteQueue::new(),
+        owner_thread: AtomicU64::new(current_thread_id()),
     });
     Box::into_raw(surface)
 }
@@ -135,8 +111,6 @@ pub extern "C" fn at_surface_terminate(surface: *mut ATSurface) {
 #[no_mangle]
 pub extern "C" fn at_surface_destroy(surface: *mut ATSurface) {
     if !surface.is_null() {
-        #[cfg(debug_assertions)]
-        thread_check::remove(surface as usize);
         unsafe {
             drop(Box::from_raw(surface));
         }
