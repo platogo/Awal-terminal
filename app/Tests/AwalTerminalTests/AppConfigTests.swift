@@ -136,4 +136,33 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.aiComponentRegistries.first?.name, "awal-components")
         XCTAssertEqual(config.aiComponentRegistries.first?.branch, "main")
     }
+
+    // MARK: - Danger mode non-persistence
+
+    func testDangerModeNotRestoredAfterReload() {
+        let configDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/awal")
+        let configFile = configDir.appendingPathComponent("config.toml")
+        let originalContents = try? String(contentsOf: configFile, encoding: .utf8)
+
+        // Write a config that explicitly enables danger_mode
+        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        try? "[ai_components]\ndanger_mode = true\n".write(to: configFile, atomically: true, encoding: .utf8)
+
+        AppConfig.reload()
+        XCTAssertFalse(AppConfig.shared.dangerModeEnabled, "danger_mode must not be restored from config")
+
+        // Also verify runtime toggle doesn't survive reload
+        AppConfig.setDangerMode(true)
+        XCTAssertTrue(AppConfig.shared.dangerModeEnabled)
+        AppConfig.reload()
+        XCTAssertFalse(AppConfig.shared.dangerModeEnabled)
+
+        // Restore original config
+        if let original = originalContents {
+            try? original.write(to: configFile, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(at: configFile)
+        }
+    }
 }
