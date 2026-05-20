@@ -454,18 +454,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
         AppConfig.reload()
     }
 
-    @objc func toggleBlockCritical(_ sender: Any?) {
-        let current = AppConfig.shared.aiComponentsBlockCritical
-        ConfigWriter.updateValue(key: "ai_components.block_critical", value: current ? "false" : "true")
-        AppConfig.reload()
-    }
-
-    @objc func toggleRequireHookApproval(_ sender: Any?) {
-        let current = AppConfig.shared.aiComponentsRequireHookApproval
-        ConfigWriter.updateValue(key: "ai_components.require_hook_approval", value: current ? "false" : "true")
-        AppConfig.reload()
-    }
-
     @objc func showAllSecurityFindings(_ sender: Any?) {
         let allFindings = RegistryManager.shared.scanResults.values.flatMap { $0 }
         AIComponentsManagerWindow.showSecurityFindings(allFindings)
@@ -563,15 +551,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
         if menuItem.action == #selector(toggleSecurityScan(_:)) {
             menuItem.state = AppConfig.shared.aiComponentsSecurityScan ? .on : .off
         }
-        if menuItem.action == #selector(toggleBlockCritical(_:)) {
-            menuItem.state = AppConfig.shared.aiComponentsBlockCritical ? .on : .off
-        }
-        if menuItem.action == #selector(toggleRequireHookApproval(_:)) {
-            menuItem.state = AppConfig.shared.aiComponentsRequireHookApproval ? .on : .off
-        }
         if menuItem.action == #selector(showAllSecurityFindings(_:)) {
-            let hasFindings = RegistryManager.shared.scanResults.values.contains { !$0.isEmpty }
-            return hasFindings
+            // Always enabled — shows disclaimer when no findings
         }
         if menuItem.action == #selector(toggleRemoteControl(_:)) {
             menuItem.state = AppConfig.shared.remoteControlEnabled ? .on : .off
@@ -818,14 +799,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
         let scanItem = NSMenuItem(title: "Security Scanning", action: #selector(toggleSecurityScan(_:)), keyEquivalent: "")
         scanItem.target = self
         securityMenu.addItem(scanItem)
-
-        let blockItem = NSMenuItem(title: "Block Critical Findings", action: #selector(toggleBlockCritical(_:)), keyEquivalent: "")
-        blockItem.target = self
-        securityMenu.addItem(blockItem)
-
-        let hookApprovalItem = NSMenuItem(title: "Require Hook Approval", action: #selector(toggleRequireHookApproval(_:)), keyEquivalent: "")
-        hookApprovalItem.target = self
-        securityMenu.addItem(hookApprovalItem)
 
         securityMenu.addItem(NSMenuItem.separator())
 
