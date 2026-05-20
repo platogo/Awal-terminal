@@ -246,7 +246,20 @@ enum AIComponentInjector {
             stacks: stacks, registries: registries,
             disabledComponents: disabledComponents, blockedComponents: blockedComponents
         )
-        updateClaudeSettings(settingsFile: claudeSettings, pluginPaths: pluginNames, mcpConfigs: mcpConfigs)
+
+        // Filter MCP configs through approval gate
+        let partitioned = McpApprovalStore.shared.filterApproved(configs: mcpConfigs)
+        let filteredMcpConfigs = partitioned.approved
+
+        if !partitioned.unapproved.isEmpty {
+            NotificationCenter.default.post(
+                name: McpApprovalStore.unapprovedMcpServersDetectedNotification,
+                object: nil,
+                userInfo: ["servers": partitioned.unapproved]
+            )
+        }
+
+        updateClaudeSettings(settingsFile: claudeSettings, pluginPaths: pluginNames, mcpConfigs: filteredMcpConfigs)
 
         // Write hooks to Claude settings
         if !hooks.preSession.isEmpty || !hooks.postSession.isEmpty || !hooks.beforeCommit.isEmpty {
@@ -259,7 +272,7 @@ enum AIComponentInjector {
             ruleCount: result.ruleCount,
             promptCount: result.promptCount,
             agentCount: result.agentCount,
-            mcpServerCount: result.mcpServerCount,
+            mcpServerCount: filteredMcpConfigs.count,
             commandModifier: nil,
             preSessionHooks: hooks.preSession,
             postSessionHooks: hooks.postSession,
