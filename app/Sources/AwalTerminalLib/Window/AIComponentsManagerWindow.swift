@@ -24,7 +24,7 @@ class AIComponentsManagerWindow: NSWindowController, NSWindowDelegate {
         if findings.isEmpty {
             let alert = NSAlert.branded()
             alert.messageText = "No Security Findings"
-            alert.informativeText = "⚠️ This scanner catches common patterns but is not comprehensive. No findings does not mean safe. Always review hooks before approving."
+            alert.informativeText = "⚠️ This scanner catches common patterns but is not comprehensive. No findings does not mean it's safe. Always review hooks before approving."
             alert.addButton(withTitle: "OK")
             alert.runModal()
             return
@@ -55,7 +55,7 @@ class AIComponentsManagerWindow: NSWindowController, NSWindowDelegate {
         // Disclaimer
         let disclaimer = NSTextField(wrappingLabelWithString:
             "⚠️ This scanner catches common patterns but is not comprehensive. " +
-            "No findings does not mean safe. Always review hooks before approving.")
+            "No findings does not mean it's safe. Always review hooks before approving.")
         disclaimer.font = .systemFont(ofSize: 11)
         disclaimer.textColor = .secondaryLabelColor
         disclaimer.translatesAutoresizingMaskIntoConstraints = false
@@ -1265,10 +1265,6 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
             let cell = NSTextField(labelWithString: "")
             cell.font = .systemFont(ofSize: 12)
             cell.lineBreakMode = .byTruncatingTail
-            // Show security indicator
-            let hasFindings = RegistryManager.shared.scanResults.values
-                .flatMap { $0 }
-                .contains { $0.componentKey == item.key }
             // Show hook approval indicator
             let isHookTab = {
                 let idx = segmentedControl.selectedSegment
@@ -1282,7 +1278,9 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
                 } else {
                     cell.stringValue = "\u{1F7E0} " + item.name
                 }
-            } else if hasFindings {
+            } else if RegistryManager.shared.scanResults.values
+                .flatMap({ $0 })
+                .contains(where: { $0.componentKey == item.key }) {
                 let hasCritical = RegistryManager.shared.scanResults.values
                     .flatMap { $0 }
                     .contains { $0.componentKey == item.key && $0.severity == .critical }
