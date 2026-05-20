@@ -1,5 +1,9 @@
 import AppKit
 
+enum UpdateCheckerError: Error {
+    case invalidReleaseURL
+}
+
 /// Checks GitHub Releases for new versions and notifies the app when an update is available.
 final class UpdateChecker {
 
@@ -66,6 +70,12 @@ final class UpdateChecker {
 
             let body = json["body"] as? String ?? ""
             let htmlURL = json["html_url"] as? String ?? ""
+
+            guard self.isValidReleaseURL(htmlURL) else {
+                DispatchQueue.main.async { completion?(false, UpdateCheckerError.invalidReleaseURL) }
+                return
+            }
+
             let remoteVersion = self.parseVersion(tagName)
 
             let release = ReleaseInfo(
@@ -199,7 +209,19 @@ final class UpdateChecker {
 
     func openReleasePage() {
         guard let release = latestRelease,
+              isValidReleaseURL(release.htmlURL),
               let url = URL(string: release.htmlURL) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Validation
+
+    /// Validates that a release URL belongs to the expected GitHub repository.
+    private func isValidReleaseURL(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let host = url.host?.lowercased(),
+              host == "github.com" else { return false }
+        let path = url.path.lowercased()
+        return path.hasPrefix("/awalterminal/awal-terminal/")
     }
 }
