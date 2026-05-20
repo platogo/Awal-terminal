@@ -241,17 +241,13 @@ extension TerminalView {
 
     /// Inject text into the terminal as if typed (used by voice dictation).
     func injectText(_ text: String) {
-        guard let _ = surface else { return }
-
-        gatedPaste(text) { [weak self] approved in
-            guard let self, let _ = self.surface else { return }
-            let bracketedPaste = at_surface_get_bracketed_paste(self.surface)
-            var data = approved
-            if bracketedPaste {
-                data = "\u{1b}[200~" + approved + "\u{1b}[201~"
-            }
-            self.queuePtyWrite(Array(data.utf8))
+        guard let s = surface else { return }
+        let bracketedPaste = at_surface_get_bracketed_paste(s)
+        var data = text
+        if bracketedPaste {
+            data = "\u{1b}[200~" + text + "\u{1b}[201~"
         }
+        queuePtyWrite(Array(data.utf8))
     }
 
     /// Gate large pastes behind a confirmation dialog.
