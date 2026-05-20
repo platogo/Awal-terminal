@@ -37,6 +37,7 @@ extension NSAlert {
 
 public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
+    private static let recordingWarningDismissedKey = "recordingSecretWarningDismissed"
     private var dangerModeTimer: Timer?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
@@ -242,7 +243,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
         }
 
         // Show warning before starting (unless suppressed)
-        if !UserDefaults.standard.bool(forKey: "suppressRecordingWarning") {
+        if !UserDefaults.standard.bool(forKey: Self.recordingWarningDismissedKey) {
             let alert = NSAlert.branded()
             alert.messageText = "Recording May Capture Secrets"
             alert.informativeText = "Session recordings capture all terminal output, including passwords, API keys, and tokens. Review the recording before sharing."
@@ -252,13 +253,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
             alert.showsSuppressionButton = true
             alert.suppressionButton?.title = "Don't warn me again"
 
-            guard let window = controller.window else { return }
-            alert.beginSheetModal(for: window) { response in
-                if alert.suppressionButton?.state == .on {
-                    UserDefaults.standard.set(true, forKey: "suppressRecordingWarning")
+            if let window = controller.window {
+                alert.beginSheetModal(for: window) { response in
+                    if alert.suppressionButton?.state == .on {
+                        UserDefaults.standard.set(true, forKey: Self.recordingWarningDismissedKey)
+                    }
+                    guard response == .alertFirstButtonReturn else { return }
+                    self.startRecording(terminal: terminal, controller: controller)
                 }
-                guard response == .alertFirstButtonReturn else { return }
-                self.startRecording(terminal: terminal, controller: controller)
+            } else {
+                let response = alert.runModal()
+                if alert.suppressionButton?.state == .on {
+                    UserDefaults.standard.set(true, forKey: Self.recordingWarningDismissedKey)
+                }
+                if response == .alertFirstButtonReturn {
+                    startRecording(terminal: terminal, controller: controller)
+                }
             }
         } else {
             startRecording(terminal: terminal, controller: controller)
