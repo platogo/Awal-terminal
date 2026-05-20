@@ -241,15 +241,9 @@ extension TerminalView {
 
     /// Inject text into the terminal as if typed (used by voice dictation).
     func injectText(_ text: String) {
-        guard let _ = surface else { return }
-
-        gatedPaste(text) { [weak self] approved in
+        gatedPaste(text, forceBracketedPaste: true) { [weak self] approved in
             guard let self, let _ = self.surface else { return }
-            let bracketedPaste = at_surface_get_bracketed_paste(self.surface)
-            var data = approved
-            if bracketedPaste {
-                data = "\u{1b}[200~" + approved + "\u{1b}[201~"
-            }
+            let data = "\u{1b}[200~" + approved + "\u{1b}[201~"
             self.queuePtyWrite(Array(data.utf8))
         }
     }
@@ -257,7 +251,8 @@ extension TerminalView {
     /// Gate large pastes behind a confirmation dialog.
     /// If the text is within the threshold, calls completion immediately.
     /// Otherwise shows a sheet with options to save-to-file, paste all, truncate, or cancel.
-    func gatedPaste(_ text: String, completion: @escaping (String) -> Void) {
+    /// - Parameter forceBracketedPaste: unused here; callers use it to decide wrapping.
+    func gatedPaste(_ text: String, forceBracketedPaste: Bool = false, completion: @escaping (String) -> Void) {
         let config = AppConfig.shared
         guard text.count > config.pasteWarningThreshold else {
             completion(text)
