@@ -68,7 +68,7 @@ extension TerminalView {
         let stagedScript: URL
         do {
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-            stagedScript = stagingDir.appendingPathComponent(scriptURL.lastPathComponent)
+            stagedScript = stagingDir.appendingPathComponent(UUID().uuidString + ".sh")
             try verifiedData.write(to: stagedScript, options: .atomic)
         } catch {
             os_log(.error, log: hookLog, "Hook staging failed: %{public}@", error.localizedDescription)

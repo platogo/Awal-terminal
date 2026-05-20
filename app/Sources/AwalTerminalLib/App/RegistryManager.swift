@@ -43,7 +43,7 @@ class RegistryManager {
 
     static let shared = RegistryManager()
 
-    /// Acquired during sync writes to hook files. Hook verification acquires this as a reader.
+    /// Acquired during sync writes to hook files. Hook verification acquires exclusive lock.
     static let hookFileLock = NSLock()
 
     static let statusDidChange = Notification.Name("RegistryManagerStatusDidChange")

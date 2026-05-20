@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let injectorLog = OSLog(subsystem: "com.awal.terminal", category: "injector")
 
 /// Context returned after AI component injection, including any command modifications needed.
 struct AIComponentContext {
@@ -120,10 +123,22 @@ enum AIComponentInjector {
                 )
             }
         } else {
+            func readHooks(_ sources: [(key: String, url: URL)]) -> [(url: URL, data: Data)] {
+                var result: [(url: URL, data: Data)] = []
+                for h in sources {
+                    do {
+                        let data = try Data(contentsOf: h.url)
+                        result.append((url: h.url, data: data))
+                    } catch {
+                        os_log(.error, log: injectorLog, "Failed to read hook: %{public}@ — %{public}@", h.url.lastPathComponent, error.localizedDescription)
+                    }
+                }
+                return result
+            }
             hooks = (
-                rawHooks.preSession.compactMap { h in (try? Data(contentsOf: h.url)).map { (url: h.url, data: $0) } },
-                rawHooks.postSession.compactMap { h in (try? Data(contentsOf: h.url)).map { (url: h.url, data: $0) } },
-                rawHooks.beforeCommit.compactMap { h in (try? Data(contentsOf: h.url)).map { (url: h.url, data: $0) } }
+                readHooks(rawHooks.preSession),
+                readHooks(rawHooks.postSession),
+                readHooks(rawHooks.beforeCommit)
             )
         }
 
