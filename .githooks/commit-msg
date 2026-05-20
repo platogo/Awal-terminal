@@ -20,7 +20,7 @@ if ! echo "$first_line" | grep -qE '^(feat|fix|chore|docs|refactor|test|style|ci
 fi
 
 msg=$(cat "$msg_file")
-if echo "$msg" | grep -qiE 'AI|Claude|LLM|GPT|Co-Authored-By'; then
+if echo "$msg" | grep -qE '\bAI\b|\bClaude\b|\bLLM\b|\bGPT\b|Co-[Aa]uthored-[Bb]y'; then
   echo "ERROR: Commit message must not contain AI, Claude, LLM, GPT, or Co-Authored-By"
   exit 1
 fi

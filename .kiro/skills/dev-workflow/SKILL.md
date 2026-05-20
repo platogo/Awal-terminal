@@ -46,6 +46,12 @@ Swift tests (`just test-swift`) require full Xcode.app installed. If unavailable
 - Description: summary of changes + what was tested
 - Link related issues with `Closes #N`
 
+## Commit Message Format
+
+- First line: `<type>: <description>` (max 72 chars)
+- Types: feat, fix, chore, docs, refactor, test, style, ci, perf
+- Do not reference AI tools in commit messages (no AI, Claude, LLM, GPT, Co-Authored-By)
+
 ## Git Hooks (auto-installed via `.githooks/`)
 
 | Hook | Checks |
