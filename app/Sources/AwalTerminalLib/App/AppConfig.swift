@@ -160,6 +160,14 @@ struct AppConfig {
     static func load() -> AppConfig {
         var config = AppConfig()
 
+        let maxConfigSize: UInt64 = 1_048_576
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: configFile.path),
+           let fileSize = attrs[.size] as? UInt64,
+           fileSize > maxConfigSize {
+            NSLog("Config file exceeds 1 MB (%llu bytes), using defaults", fileSize)
+            return config
+        }
+
         guard let contents = try? String(contentsOf: configFile, encoding: .utf8) else {
             return config
         }
