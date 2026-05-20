@@ -8,51 +8,24 @@ use std::ffi::CString;
 use std::os::fd::RawFd;
 use std::os::raw::c_char;
 use std::slice;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Debug-only thread safety check for FFI entry points.
-/// Tracks the thread that first calls an FFI function on a surface and asserts
-/// all subsequent calls come from the same thread.
-#[cfg(debug_assertions)]
-mod thread_check {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use std::thread::ThreadId;
+static FFI_THREAD_ID: AtomicU64 = AtomicU64::new(0);
 
-    static SURFACE_THREADS: Mutex<Option<HashMap<usize, ThreadId>>> = Mutex::new(None);
-
-    pub fn assert_same_thread(surface_ptr: usize) {
-        let current = std::thread::current().id();
-        let mut guard = SURFACE_THREADS.lock().unwrap();
-        let map = guard.get_or_insert_with(HashMap::new);
-        if let Some(&expected) = map.get(&surface_ptr) {
-            assert_eq!(
-                current, expected,
-                "FFI thread safety violation: ATSurface called from different thread"
+macro_rules! check_ffi_thread {
+    () => {
+        let current = unsafe { libc::pthread_self() as u64 };
+        let expected = FFI_THREAD_ID.load(Ordering::Relaxed);
+        if expected == 0 {
+            FFI_THREAD_ID.store(current, Ordering::Relaxed);
+        } else if current != expected {
+            eprintln!(
+                "FATAL: FFI thread safety violation — called from thread {} but owned by {}",
+                current, expected
             );
-        } else {
-            map.insert(surface_ptr, current);
+            std::process::abort();
         }
-    }
-
-    pub fn remove(surface_ptr: usize) {
-        if let Ok(mut guard) = SURFACE_THREADS.lock() {
-            if let Some(map) = guard.as_mut() {
-                map.remove(&surface_ptr);
-            }
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-macro_rules! check_ffi_thread {
-    ($ptr:expr) => {
-        thread_check::assert_same_thread($ptr as usize);
     };
-}
-
-#[cfg(not(debug_assertions))]
-macro_rules! check_ffi_thread {
-    ($ptr:expr) => {};
 }
 
 /// Opaque handle to a terminal surface.
@@ -135,8 +108,6 @@ pub extern "C" fn at_surface_terminate(surface: *mut ATSurface) {
 #[no_mangle]
 pub extern "C" fn at_surface_destroy(surface: *mut ATSurface) {
     if !surface.is_null() {
-        #[cfg(debug_assertions)]
-        thread_check::remove(surface as usize);
         unsafe {
             drop(Box::from_raw(surface));
         }
@@ -239,7 +210,7 @@ pub extern "C" fn at_surface_get_child_pid(surface: *const ATSurface) -> i32 {
 /// Read from the PTY and process VT sequences. Returns number of bytes read, 0 if nothing available, -1 on error.
 #[no_mangle]
 pub extern "C" fn at_surface_process_pty(surface: *mut ATSurface) -> i32 {
-    check_ffi_thread!(surface);
+    check_ffi_thread!();
     let surface = mut_ref_or!(surface, -1);
     let pty = match &surface.pty {
         Some(p) => p,
@@ -268,7 +239,7 @@ pub extern "C" fn at_surface_process_pty(surface: *mut ATSurface) -> i32 {
 /// Send a key event (raw bytes) to the PTY.
 #[no_mangle]
 pub extern "C" fn at_surface_key_event(surface: *mut ATSurface, data: *const u8, len: u32) -> i32 {
-    check_ffi_thread!(surface);
+    check_ffi_thread!();
     let surface = mut_ref_or!(surface, -1);
     if data.is_null() || len == 0 {
         return -1;
@@ -333,7 +304,7 @@ pub extern "C" fn at_surface_get_size(surface: *const ATSurface, cols: *mut u32,
 /// Resize the terminal surface (screen grid + PTY).
 #[no_mangle]
 pub extern "C" fn at_surface_resize(surface: *mut ATSurface, cols: u32, rows: u32) {
-    check_ffi_thread!(surface);
+    check_ffi_thread!();
     let surface = mut_ref_or!(surface);
     surface.screen.resize(cols as usize, rows as usize);
     if let Some(pty) = &surface.pty {
@@ -350,7 +321,7 @@ pub extern "C" fn at_surface_read_cells(
     out: *mut CCell,
     max_cells: u32,
 ) -> u32 {
-    check_ffi_thread!(surface);
+    check_ffi_thread!();
     let surface = ref_or!(surface, 0);
     if out.is_null() {
         return 0;
@@ -502,7 +473,7 @@ pub extern "C" fn at_surface_is_synchronized(surface: *const ATSurface) -> bool 
 /// Used for rendering TUI menus before a shell is spawned.
 #[no_mangle]
 pub extern "C" fn at_surface_feed_bytes(surface: *mut ATSurface, data: *const u8, len: u32) {
-    check_ffi_thread!(surface);
+    check_ffi_thread!();
     let surface = mut_ref_or!(surface);
     if data.is_null() || len == 0 {
         return;
