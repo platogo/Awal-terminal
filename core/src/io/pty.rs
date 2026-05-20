@@ -80,8 +80,15 @@ impl Pty {
                 std::mem::forget(stdout_fd);
                 std::mem::forget(stderr_fd);
 
-                if slave_raw > 2 {
-                    drop(slave);
+                // Close all inherited fds (GPU handles, sockets, pipes from other tabs).
+                // The slave pty has already been dup2'd onto 0/1/2, so closing
+                // everything > 2 is safe.
+                std::mem::forget(slave);
+                unsafe {
+                    let max_fd = libc::getdtablesize();
+                    for fd in 3..max_fd {
+                        libc::close(fd);
+                    }
                 }
 
                 // Set environment variables
