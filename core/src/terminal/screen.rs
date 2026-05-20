@@ -841,7 +841,22 @@ impl Screen {
                 self.scrollback_wrapped.push_back(was_wrapped);
 
                 // Migrate row 0 hyperlinks to scrollback using absolute index
+                const SCROLLBACK_HYPERLINK_CAP: usize = 100_000;
+                const MAX_URL_LEN: usize = 2048;
                 for (c, url) in row0_hyperlinks {
+                    if url.len() > MAX_URL_LEN {
+                        continue;
+                    }
+                    if self.scrollback_hyperlinks.len() >= SCROLLBACK_HYPERLINK_CAP {
+                        // Evict oldest 25% by removing entries with the lowest row indices
+                        let evict_count = SCROLLBACK_HYPERLINK_CAP / 4;
+                        let mut keys: Vec<(usize, usize)> =
+                            self.scrollback_hyperlinks.keys().copied().collect();
+                        keys.sort_unstable();
+                        for key in keys.into_iter().take(evict_count) {
+                            self.scrollback_hyperlinks.remove(&key);
+                        }
+                    }
                     self.scrollback_hyperlinks.insert((abs_idx, c), url);
                 }
 
@@ -1294,6 +1309,81 @@ mod tests {
             screen.scrollback.len(),
             sb_len,
             "scrollback should be preserved on resize"
+        );
+    }
+
+    #[test]
+    fn test_scrollback_hyperlink_cap_evicts_oldest() {
+        let mut screen = Screen::new(10, 2);
+
+        // Directly fill scrollback_hyperlinks to just below cap to avoid slow char-by-char writes
+        let cap: usize = 100_000;
+        for i in 0..cap {
+            screen
+                .scrollback_hyperlinks
+                .insert((i, 0), format!("https://x.com/{}", i));
+        }
+        // Push some scrollback rows so the structure is consistent
+        for _ in 0..10 {
+            screen
+                .scrollback
+                .push_back(vec![Cell::default(); screen.cols]);
+            screen.scrollback_wrapped.push_back(false);
+        }
+
+        // Now scroll a line with a hyperlink — this should trigger eviction
+        screen.current_hyperlink = Some("https://new.com".to_string());
+        write_str(&mut screen, "newline!!!");
+        screen.newline();
+        screen.carriage_return();
+        // Push another line to scroll the hyperlinked line into scrollback
+        screen.current_hyperlink = None;
+        write_str(&mut screen, "push it!  ");
+        screen.newline();
+        screen.carriage_return();
+
+        // After eviction of 25%, we should be well under cap
+        assert!(
+            screen.scrollback_hyperlinks.len() <= cap,
+            "hyperlink count {} exceeds cap",
+            screen.scrollback_hyperlinks.len()
+        );
+
+        // The new entry should be present
+        assert!(
+            screen
+                .scrollback_hyperlinks
+                .values()
+                .any(|v| v == "https://new.com"),
+            "newly inserted hyperlink should be present"
+        );
+
+        // Oldest entries (lowest keys) should have been evicted
+        assert!(
+            !screen.scrollback_hyperlinks.contains_key(&(0, 0)),
+            "oldest hyperlink should have been evicted"
+        );
+    }
+
+    #[test]
+    fn test_scrollback_hyperlink_url_length_cap() {
+        let mut screen = Screen::new(10, 2);
+
+        // Set a hyperlink longer than 2048 chars
+        let long_url = "https://example.com/".to_string() + &"x".repeat(2100);
+        screen.current_hyperlink = Some(long_url);
+        write_str(&mut screen, "test line!");
+        screen.newline();
+        screen.carriage_return();
+        // Scroll it into scrollback
+        write_str(&mut screen, "next line!");
+        screen.newline();
+        screen.carriage_return();
+
+        // The long URL should have been rejected from scrollback_hyperlinks
+        assert!(
+            screen.scrollback_hyperlinks.is_empty(),
+            "URLs longer than 2048 should be rejected"
         );
     }
 }
