@@ -44,6 +44,13 @@ final class HookApprovalStore {
         return storedHash == fileHash(at: fileURL)
     }
 
+    /// Returns `true` when the stored hash matches the hash of pre-read data.
+    /// Use this to avoid TOCTOU: read once, verify against in-memory data.
+    func isApproved(key: String, data: Data) -> Bool {
+        guard let storedHash = approvals[key] else { return false }
+        return storedHash == sha256(data)
+    }
+
     /// Approve a hook by storing its key and the SHA-256 of its current content.
     func approve(key: String, fileURL: URL) {
         approvals[key] = fileHash(at: fileURL)
@@ -67,6 +74,31 @@ final class HookApprovalStore {
         for hook in hooks {
             if isApproved(key: hook.key, fileURL: hook.url) {
                 approved.append(hook.url)
+            } else {
+                unapproved.append(hook)
+            }
+        }
+        return (approved, unapproved)
+    }
+
+    /// Partition hooks into approved (with verified data) and unapproved.
+    /// Reads each file once under the registry lock and returns the verified bytes,
+    /// eliminating TOCTOU between hash check and staging.
+    func filterApprovedWithData(hooks: [(key: String, url: URL)])
+        -> (approved: [(url: URL, data: Data)], unapproved: [(key: String, url: URL)])
+    {
+        RegistryManager.hookFileLock.lock()
+        defer { RegistryManager.hookFileLock.unlock() }
+
+        var approved: [(url: URL, data: Data)] = []
+        var unapproved: [(key: String, url: URL)] = []
+        for hook in hooks {
+            guard let data = try? Data(contentsOf: hook.url) else {
+                unapproved.append(hook)
+                continue
+            }
+            if isApproved(key: hook.key, data: data) {
+                approved.append((url: hook.url, data: data))
             } else {
                 unapproved.append(hook)
             }
@@ -120,6 +152,10 @@ final class HookApprovalStore {
 
     private func fileHash(at url: URL) -> String {
         guard let data = try? Data(contentsOf: url) else { return "" }
+        return sha256(data)
+    }
+
+    private func sha256(_ data: Data) -> String {
         var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
         _ = data.withUnsafeBytes { CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash) }
         return hash.map { String(format: "%02x", $0) }.joined()

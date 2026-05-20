@@ -50,8 +50,8 @@ class TerminalView: NSView {
 
     var activeModelName: String = ""
     var lastAIComponentContext: AIComponentContext?
-    var postSessionHooks: [URL] = []
-    var beforeCommitHooks: [URL] = []
+    var postSessionHooks: [(url: URL, data: Data)] = []
+    var beforeCommitHooks: [(url: URL, data: Data)] = []
     var lastWorkingDir: String?
     var activeProvider: String = ""
     var isGenerating: Bool = false

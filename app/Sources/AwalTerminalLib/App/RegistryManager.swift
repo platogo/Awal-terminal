@@ -43,6 +43,9 @@ class RegistryManager {
 
     static let shared = RegistryManager()
 
+    /// Acquired during sync writes to hook files. Hook verification acquires this as a reader.
+    static let hookFileLock = NSLock()
+
     static let statusDidChange = Notification.Name("RegistryManagerStatusDidChange")
     static let componentsDidChange = Notification.Name("RegistryManagerComponentsDidChange")
 
@@ -919,6 +922,9 @@ class RegistryManager {
     }
 
     private func pullRegistry(at dir: URL, branch: String, name: String) -> Result<Void, RegistrySyncError> {
+        RegistryManager.hookFileLock.lock()
+        defer { RegistryManager.hookFileLock.unlock() }
+
         // Fetch latest from remote, then hard-reset to match.
         // The clone is a read-only cache so we always want to mirror the remote exactly.
         let fetch = Process()
