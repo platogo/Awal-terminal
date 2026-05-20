@@ -149,6 +149,10 @@ struct AppConfig {
         shared = load()
     }
 
+    static func setDangerMode(_ enabled: Bool) {
+        shared.dangerModeEnabled = enabled
+    }
+
     private static let configDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/awal")
     private static let configFile = configDir.appendingPathComponent("config.toml")
@@ -224,9 +228,6 @@ struct AppConfig {
             config.tabsRandomColorPalette = v.split(separator: ",")
                 .compactMap { parseColor(String($0)) }
         }
-
-        // Danger mode
-        if let v = parsed["ai_components.danger_mode"] { config.dangerModeEnabled = v == "true" }
 
         // Remote control
         if let v = parsed["ai_components.remote_control"] { config.remoteControlEnabled = v == "true" }

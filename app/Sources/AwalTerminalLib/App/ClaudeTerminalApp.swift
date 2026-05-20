@@ -37,15 +37,11 @@ extension NSAlert {
 
 public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
+    private var dangerModeTimer: Timer?
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
         at_init_logging()
         BundledFont.registerBundledFonts()
-
-        // Always start with danger mode disabled
-        if AppConfig.shared.dangerModeEnabled {
-            ConfigWriter.updateValue(key: "ai_components.danger_mode", value: "false")
-            AppConfig.reload()
-        }
 
         if let icon = AppIcon.image {
             NSApp.applicationIconImage = icon
@@ -438,8 +434,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
             guard response == .alertFirstButtonReturn else { return }
         }
 
-        ConfigWriter.updateValue(key: "ai_components.danger_mode", value: newValue ? "true" : "false")
-        AppConfig.reload()
+        AppConfig.setDangerMode(newValue)
+
+        if newValue {
+            dangerModeTimer?.invalidate()
+            dangerModeTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: false) { [weak self] _ in
+                AppConfig.setDangerMode(false)
+                self?.dangerModeTimer = nil
+            }
+        } else {
+            dangerModeTimer?.invalidate()
+            dangerModeTimer = nil
+        }
     }
 
     @objc func showImportExport(_ sender: Any?) {

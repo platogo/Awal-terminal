@@ -136,4 +136,13 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.aiComponentRegistries.first?.name, "awal-components")
         XCTAssertEqual(config.aiComponentRegistries.first?.branch, "main")
     }
+
+    // MARK: - Danger mode non-persistence
+
+    func testDangerModeNotRestoredAfterReload() {
+        AppConfig.setDangerMode(true)
+        XCTAssertTrue(AppConfig.shared.dangerModeEnabled)
+        AppConfig.reload()
+        XCTAssertFalse(AppConfig.shared.dangerModeEnabled)
+    }
 }

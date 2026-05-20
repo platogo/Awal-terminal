@@ -424,7 +424,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 tabID: tab.id,
                 title: tab.title,
                 tabColor: tab.tabColor,
-                isDangerMode: tab.isDangerMode,
+                isDangerMode: false,
                 isGenerating: tab.isGenerating,
                 groupID: tab.groupID,
                 groupColor: group?.color,
@@ -1252,7 +1252,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 splitTree: splitTree,
                 customTitle: tab.customTitle,
                 tabColorHex: tab.tabColor.map { $0.hexString },
-                isDangerMode: tab.isDangerMode,
+                isDangerMode: false,
                 userClosedAIPanel: tab.userClosedAIPanel,
                 groupID: tab.groupID?.uuidString
             )
@@ -1287,7 +1287,6 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         case .leaf(let tv):
             let modelName = tv.activeModelName
             let workingDir = tv.lastWorkingDir ?? nil
-            let isDanger = tv.isDangerMode
             // Only the primary terminal (first leaf) gets the session ID from the tab's token tracker
             let isFirst = tab.splitContainer.rootNode.allLeaves().first === tv
             var sessionId: String? = isFirst ? tab.tokenTracker.sessionId : nil
@@ -1303,7 +1302,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             return .leaf(SavedPaneState(
                 modelName: modelName,
                 workingDir: workingDir,
-                isDangerMode: isDanger,
+                isDangerMode: false,
                 sessionId: sessionId
             ))
         case .split(let dir, let first, let second):
@@ -1329,7 +1328,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
             // Restore tab properties
             tab.customTitle = savedTab.customTitle
-            tab.isDangerMode = savedTab.isDangerMode
+            tab.isDangerMode = false
             tab.userClosedAIPanel = savedTab.userClosedAIPanel
             if let hex = savedTab.tabColorHex {
                 tab.tabColor = NSColor.fromHex(hex)
