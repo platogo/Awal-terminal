@@ -11,7 +11,7 @@ description: Architecture of the AI output analyzer and component system. Use wh
 
 ## Rust: AiAnalyzer
 - Lives inside `ATSurface` (field: `analyzer: AiAnalyzer`), processes screen + scrollback rows
-- Detects `RegionType` variants: ToolUse, ToolOutput, CodeBlock, Thinking, Prompt, CostSummary, Diff, Separator
+- Detects `RegionType` variants: Normal, ToolUse, ToolOutput, CodeBlock, Thinking, Prompt, CostSummary, Diff, Separator
 - Produces `OutputRegion` structs (start_row, end_row, type, collapsed, label, line_count)
 - Exposed to Swift via FFI functions in `ffi.rs`
 - Tool names list (`DEFAULT_TOOL_NAMES`) matches Claude Code's tool vocabulary
@@ -27,8 +27,8 @@ Key files in `app/Sources/AwalTerminalLib/App/`:
 - `HookApprovalStore.swift` — gate for hook execution with audit trail
 
 ## Swift: AI Side Panel
-- `AISidePanelView.swift` — displays token usage, costs, context window, file refs, git changes
-- `TokenTracker.swift` — per-tab token/cost tracking
+- `app/Sources/AwalTerminalLib/Window/AISidePanelView.swift` — displays token usage, costs, context window, file refs, git changes
+- `app/Sources/AwalTerminalLib/App/TokenTracker.swift` — per-tab token/cost tracking
 - Reads region data from Rust via FFI to render foldable sections
 
 ## Adding a New Region Type

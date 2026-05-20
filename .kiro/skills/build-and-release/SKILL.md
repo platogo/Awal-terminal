@@ -12,8 +12,11 @@ description: Build system and release workflow. Use when building, bundling, or 
 - `just test` — run all tests (Rust + Swift)
 - `just fmt` — format Rust code
 - `just lint` — clippy lints (`cargo clippy -- -W warnings`)
+- `just clean` — remove build artifacts
+- `just header` — regenerate `core/include/awalterminal.h` via cbindgen
 - `just bundle` — package release .app
 - `just bundle-universal` — universal binary .app (arm64 + x86_64)
+- `just coverage` — run tests with coverage reporting (requires `cargo-llvm-cov`)
 
 ## Build Order (dependency chain)
 1. Rust core MUST build first (produces `libawalterminal.a` + regenerates `core/include/awalterminal.h`)
@@ -33,6 +36,7 @@ description: Build system and release workflow. Use when building, bundling, or 
 - `ci.yml` — Rust tests, clippy, fmt check; Swift tests
 - `test.yml` — Rust tests + Swift tests + universal release build verification
 - Both trigger on push/PR to main
+- Note: `ci.yml` and `test.yml` have overlapping jobs; both run the full Rust + Swift test suite.
 
 ## Red Flags
 - Building Swift without building Rust first → linker errors
