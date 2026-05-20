@@ -8,6 +8,7 @@ enum RegistrySyncError: Error, LocalizedError {
     case gitNotFound
     case localskillsNotFound
     case localskillsInstallFailed(name: String, stderr: String)
+    case pinVerificationFailed(name: String, expected: String, actual: String)
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +24,8 @@ enum RegistrySyncError: Error, LocalizedError {
             return "localskills CLI not found. Install with: npm i -g @localskills/cli"
         case .localskillsInstallFailed(let name, let stderr):
             return "Failed to install localskills '\(name)': \(stderr)"
+        case .pinVerificationFailed(let name, let expected, let actual):
+            return "Pin verification failed for '\(name)': expected \(expected), got \(actual)"
         }
     }
 }
@@ -264,7 +267,7 @@ class RegistryManager {
             let result: Result<Void, RegistrySyncError>
             switch reg.type {
             case .git:
-                result = self.syncOneInternal(name: reg.name, url: reg.url, branch: reg.branch, tag: reg.tag, force: force)
+                result = self.syncOneInternal(name: reg.name, url: reg.url, branch: reg.branch, tag: reg.tag, pin: reg.pin, force: force)
             case .localskills:
                 result = self.syncLocalSkills(name: reg.name, slugs: reg.slugs, force: force)
             case .local:
@@ -340,7 +343,7 @@ class RegistryManager {
                 let result: Result<Void, RegistrySyncError>
                 switch reg.type {
                 case .git:
-                    result = self.syncOneInternal(name: reg.name, url: reg.url, branch: reg.branch, tag: reg.tag, force: force)
+                    result = self.syncOneInternal(name: reg.name, url: reg.url, branch: reg.branch, tag: reg.tag, pin: reg.pin, force: force)
                 case .localskills:
                     result = self.syncLocalSkills(name: reg.name, slugs: reg.slugs, force: force)
                 case .local:
@@ -356,7 +359,7 @@ class RegistryManager {
     func syncOne(registry reg: RegistryConfig) -> Result<Void, RegistrySyncError> {
         switch reg.type {
         case .git:
-            return syncOneInternal(name: reg.name, url: reg.url, branch: reg.branch, tag: reg.tag, force: true)
+            return syncOneInternal(name: reg.name, url: reg.url, branch: reg.branch, tag: reg.tag, pin: reg.pin, force: true)
         case .localskills:
             return syncLocalSkills(name: reg.name, slugs: reg.slugs, force: true)
         case .local:
@@ -483,7 +486,7 @@ class RegistryManager {
 
     // MARK: - Internal Sync
 
-    private func syncOneInternal(name: String, url: String, branch: String, tag: String? = nil, force: Bool) -> Result<Void, RegistrySyncError> {
+    private func syncOneInternal(name: String, url: String, branch: String, tag: String? = nil, pin: String? = nil, force: Bool) -> Result<Void, RegistrySyncError> {
         // Local registry — skip git operations
         if name == "local" {
             let repoDir = registriesDir.appendingPathComponent(name)
@@ -493,6 +496,22 @@ class RegistryManager {
                 setStatus(name, .notCloned)
             }
             return .success(())
+        }
+
+        // Pinned registry — verify commit or clone at pin
+        if let pin {
+            let repoDir = registriesDir.appendingPathComponent(name)
+            if fm.fileExists(atPath: repoDir.path) {
+                let current = currentCommit(at: repoDir)
+                if current == pin {
+                    setStatus(name, .synced(lastSync: Date(), commitHash: current))
+                    return .success(())
+                } else {
+                    setStatus(name, .error("Pin mismatch"))
+                    return .failure(.pinVerificationFailed(name: name, expected: pin, actual: current))
+                }
+            }
+            // Not yet cloned — fall through to clone below, handled with pin checkout
         }
 
         setStatus(name, .syncing)
@@ -531,7 +550,25 @@ class RegistryManager {
             }
         } else {
             let cloneBranch = tag ?? branch
-            result = cloneRegistry(url: url, to: repoDir, branch: cloneBranch, name: name)
+            result = cloneRegistry(url: url, to: repoDir, branch: cloneBranch, name: name, shallow: pin == nil)
+            if case .success = result, let pin {
+                // Checkout pinned commit and verify
+                let checkout = Process()
+                checkout.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                checkout.arguments = ["-C", repoDir.path, "checkout", pin]
+                checkout.standardOutput = FileHandle.nullDevice
+                checkout.standardError = FileHandle.nullDevice
+                do {
+                    try checkout.run()
+                    checkout.waitUntilExit()
+                } catch {}
+                let actual = currentCommit(at: repoDir)
+                if actual != pin {
+                    try? fm.removeItem(at: repoDir)
+                    setStatus(name, .error("Pin mismatch"))
+                    return .failure(.pinVerificationFailed(name: name, expected: pin, actual: actual))
+                }
+            }
         }
 
         switch result {
@@ -849,7 +886,7 @@ class RegistryManager {
 
     // MARK: - Git Operations
 
-    private func cloneRegistry(url: String, to dir: URL, branch: String, name: String) -> Result<Void, RegistrySyncError> {
+    private func cloneRegistry(url: String, to dir: URL, branch: String, name: String, shallow: Bool = true) -> Result<Void, RegistrySyncError> {
         guard fm.fileExists(atPath: "/usr/bin/git") else {
             return .failure(.gitNotFound)
         }
@@ -858,7 +895,10 @@ class RegistryManager {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        proc.arguments = ["clone", "--depth", "1", "--branch", branch, url, dir.path]
+        var args = ["clone"]
+        if shallow { args += ["--depth", "1"] }
+        args += ["--branch", branch, url, dir.path]
+        proc.arguments = args
         proc.standardOutput = FileHandle.nullDevice
         let stderrPipe = Pipe()
         proc.standardError = stderrPipe
