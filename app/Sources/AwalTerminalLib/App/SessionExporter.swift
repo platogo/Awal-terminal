@@ -107,7 +107,10 @@ class SessionExporter {
     ) {
         let fileProperties: [CFString: Any] = [
             kCGImagePropertyGIFDictionary: [
-                kCGImagePropertyGIFLoopCount: 0  // Loop forever
+                kCGImagePropertyGIFLoopCount: 0,  // Loop forever
+                // kCGImagePropertyGIFComment is not exposed in Swift; "GIFComment" is the documented
+                // Core Graphics key for embedding comments in GIF metadata.
+                "GIFComment" as CFString: "⚠️ WARNING: This recording may contain sensitive information (API keys, passwords, tokens). Review before sharing. Exported by Awal Terminal.",
             ]
         ]
 

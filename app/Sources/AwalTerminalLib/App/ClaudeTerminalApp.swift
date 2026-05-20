@@ -37,6 +37,7 @@ extension NSAlert {
 
 public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
+    private static let recordingWarningDismissedKey = "recordingSecretWarningDismissed"
     private var dangerModeTimer: Timer?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
@@ -233,12 +234,50 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
             wireRecorder(terminal.sessionRecorder!, tab: tab, terminal: terminal)
         }
 
-        if let url = terminal.toggleRecording() {
-            showExportPanel(url: url, tab: tab, controller: controller)
-        } else {
-            // Recording started
-            controller.flashStatusBar("Recording started")
+        // If already recording, stop and export — no warning needed
+        if terminal.sessionRecorder?.isRecording == true {
+            if let url = terminal.toggleRecording() {
+                showExportPanel(url: url, tab: tab, controller: controller)
+            }
+            return
         }
+
+        // Show warning before starting (unless suppressed)
+        if !UserDefaults.standard.bool(forKey: Self.recordingWarningDismissedKey) {
+            let alert = NSAlert.branded()
+            alert.messageText = "Recording May Capture Secrets"
+            alert.informativeText = "Session recordings capture all terminal output, including passwords, API keys, and tokens. Review the recording before sharing."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Start Recording")
+            alert.addButton(withTitle: "Cancel")
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Don't warn me again"
+
+            if let window = controller.window {
+                alert.beginSheetModal(for: window) { response in
+                    if alert.suppressionButton?.state == .on {
+                        UserDefaults.standard.set(true, forKey: Self.recordingWarningDismissedKey)
+                    }
+                    guard response == .alertFirstButtonReturn else { return }
+                    self.startRecording(terminal: terminal, controller: controller)
+                }
+            } else {
+                let response = alert.runModal()
+                if alert.suppressionButton?.state == .on {
+                    UserDefaults.standard.set(true, forKey: Self.recordingWarningDismissedKey)
+                }
+                if response == .alertFirstButtonReturn {
+                    startRecording(terminal: terminal, controller: controller)
+                }
+            }
+        } else {
+            startRecording(terminal: terminal, controller: controller)
+        }
+    }
+
+    private func startRecording(terminal: TerminalView, controller: TerminalWindowController) {
+        _ = terminal.toggleRecording()
+        controller.flashStatusBar("Recording started")
     }
 
     private func wireRecorder(_ recorder: SessionRecorder, tab: TabState, terminal: TerminalView) {
@@ -262,6 +301,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
         panel.nameFieldStringValue = "\(safeName).gif"
+        panel.message = "⚠️ This recording may contain secrets (API keys, passwords). Review before sharing."
 
         guard let window = controller.window else { return }
         panel.beginSheetModal(for: window) { [weak tab] result in
