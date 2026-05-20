@@ -13,6 +13,7 @@ struct RegistryConfig {
     let url: String
     let branch: String
     var tag: String? = nil
+    var pin: String? = nil
     var type: RegistryType = .git
     var slugs: [String] = []
     var path: String? = nil
@@ -280,6 +281,7 @@ struct AppConfig {
             let url = parsed["ai_components.registry.\(name).url"] ?? ""
             let branch = parsed["ai_components.registry.\(name).branch"] ?? "main"
             let tag = parsed["ai_components.registry.\(name).tag"]
+            let pin = parsed["ai_components.registry.\(name).pin"]
             let slugsStr = parsed["ai_components.registry.\(name).slugs"] ?? ""
             let slugs = slugsStr.isEmpty ? [] : slugsStr.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             let path = parsed["ai_components.registry.\(name).path"]
@@ -295,7 +297,7 @@ struct AppConfig {
             }
 
             if isValid {
-                let regConfig = RegistryConfig(name: name, url: url, branch: branch, tag: tag, type: regType, slugs: slugs, path: path, mapping: mapping, enabled: enabled)
+                let regConfig = RegistryConfig(name: name, url: url, branch: branch, tag: tag, pin: pin, type: regType, slugs: slugs, path: path, mapping: mapping, enabled: enabled)
                 // Update existing default or append new
                 if let idx = config.aiComponentRegistries.firstIndex(where: { $0.name == name }) {
                     config.aiComponentRegistries[idx] = regConfig

@@ -175,6 +175,7 @@ remote_control = false
 [ai_components.registry.awal-components]
 url = "https://github.com/AwalTerminal/awal-ai-components-registry.git"
 branch = "main"
+# pin = "a1b2c3d4e5f6..."  # Lock to specific commit (optional)
 
 [ai_components.registry.my-skill]
 type = "localskills"
