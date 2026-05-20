@@ -1342,6 +1342,43 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
             return
         }
 
+        // MCP server approval flow
+        let isMcpTab = {
+            let idx = self.segmentedControl.selectedSegment
+            return idx >= 0 && idx < self.tabTypes.count && self.tabTypes[idx] == .mcpServer
+        }()
+
+        if isMcpTab {
+            if sender.state == .on {
+                if let (serverName, config) = resolveMcpConfig(key: item.key) {
+                    let command = config["command"] as? String ?? "unknown"
+                    let args = (config["args"] as? [String])?.joined(separator: " ") ?? ""
+                    let env = (config["env"] as? [String: String])?.map { "\($0.key)=\($0.value)" }.joined(separator: "\n") ?? ""
+
+                    let alert = NSAlert()
+                    alert.messageText = "Approve MCP server?"
+                    alert.informativeText = "Command: \(command) \(args)\n\nEnvironment:\n\(env.isEmpty ? "(none)" : env)"
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Approve")
+                    alert.addButton(withTitle: "Cancel")
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        McpApprovalStore.shared.approve(name: serverName, config: config)
+                    } else {
+                        sender.state = .off
+                    }
+                } else {
+                    sender.state = .off
+                }
+            } else {
+                if let (serverName, _) = resolveMcpConfig(key: item.key) {
+                    McpApprovalStore.shared.revoke(name: serverName)
+                }
+            }
+            componentTableView.reloadData()
+            return
+        }
+
         var disabled = AppConfig.shared.aiComponentsDisabled
         if sender.state == .off {
             disabled.insert(item.key)
@@ -1542,6 +1579,39 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
             return noExt
         }
         return nil
+    }
+
+    /// Resolve an MCP server component key to its server name and parsed config.
+    /// Key format: `registryName/stack/mcp-server/name`
+    private func resolveMcpConfig(key: String) -> (serverName: String, config: [String: Any])? {
+        let parts = key.split(separator: "/", maxSplits: 3)
+        guard parts.count == 4 else { return nil }
+        let registryName = String(parts[0])
+        let stack = String(parts[1])
+        let name = String(parts[3])
+        let serverName = "awal-\(registryName)-\(name)"
+
+        // For mapped registries
+        let mode = RegistryManager.shared.mappingModes[registryName]
+        if mode != nil && mode != .standard {
+            if let resolved = RegistryManager.shared.mappedComponents[registryName] {
+                for comp in resolved where comp.type == .mcpServer {
+                    let compKey = "\(registryName)/\(comp.stack)/mcp-server/\(comp.name)"
+                    if compKey == key,
+                       let data = try? Data(contentsOf: comp.fileURL),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        return (serverName, json)
+                    }
+                }
+            }
+        }
+
+        let regPath = RegistryManager.shared.registryPath(name: registryName)
+        let stackPrefix = stack == "common" ? "common" : "stacks/\(stack)"
+        let file = regPath.appendingPathComponent("\(stackPrefix)/mcp-servers/\(name).json")
+        guard let data = try? Data(contentsOf: file),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return (serverName, json)
     }
 }
 
