@@ -66,6 +66,12 @@ final class UpdateChecker {
 
             let body = json["body"] as? String ?? ""
             let htmlURL = json["html_url"] as? String ?? ""
+
+            guard self.isValidReleaseURL(htmlURL) else {
+                DispatchQueue.main.async { completion?(false, nil) }
+                return
+            }
+
             let remoteVersion = self.parseVersion(tagName)
 
             let release = ReleaseInfo(
@@ -199,7 +205,15 @@ final class UpdateChecker {
 
     func openReleasePage() {
         guard let release = latestRelease,
+              isValidReleaseURL(release.htmlURL),
               let url = URL(string: release.htmlURL) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Validation
+
+    /// Validates that a release URL belongs to the expected GitHub repository.
+    private func isValidReleaseURL(_ urlString: String) -> Bool {
+        urlString.lowercased().hasPrefix("https://github.com/awalterminal/awal-terminal/")
     }
 }
