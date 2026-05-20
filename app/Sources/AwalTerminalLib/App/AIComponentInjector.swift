@@ -22,6 +22,8 @@ struct AIComponentContext {
 /// - Codex: copies skills to ~/.codex/skills/
 enum AIComponentInjector {
 
+    private static let settingsQueue = DispatchQueue(label: "com.awal.claude-settings")
+
     /// Inject AI components for the given model and project.
     /// Returns an AIComponentContext with detected info and optional command modifier.
     static func inject(modelName: String, projectPath: String) -> AIComponentContext? {
@@ -244,11 +246,12 @@ enum AIComponentInjector {
             )
         }
 
-        updateClaudeSettings(settingsFile: claudeSettings, pluginPaths: pluginNames, mcpConfigs: filteredMcpConfigs)
+        settingsQueue.sync {
+            updateClaudeSettings(settingsFile: claudeSettings, pluginPaths: pluginNames, mcpConfigs: filteredMcpConfigs)
 
-        // Write hooks to Claude settings
-        if !hooks.preSession.isEmpty || !hooks.postSession.isEmpty || !hooks.beforeCommit.isEmpty {
-            writeClaudeHooks(settingsFile: claudeSettings, preHooks: hooks.preSession.map(\.url), postHooks: hooks.postSession.map(\.url), beforeCommitHooks: hooks.beforeCommit.map(\.url))
+            if !hooks.preSession.isEmpty || !hooks.postSession.isEmpty || !hooks.beforeCommit.isEmpty {
+                writeClaudeHooks(settingsFile: claudeSettings, preHooks: hooks.preSession.map(\.url), postHooks: hooks.postSession.map(\.url), beforeCommitHooks: hooks.beforeCommit.map(\.url))
+            }
         }
 
         return AIComponentContext(
@@ -379,45 +382,47 @@ enum AIComponentInjector {
         }
 
         // Remove from enabledPlugins, mcpServers, and hooks in settings
-        if let data = try? Data(contentsOf: claudeSettings),
-           var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        settingsQueue.sync {
+            if let data = try? Data(contentsOf: claudeSettings),
+               var settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
 
-            // Clean enabledPlugins (record format: path → true)
-            if var plugins = settings["enabledPlugins"] as? [String: Bool] {
-                let awalKeys = plugins.keys.filter { $0.contains("/plugins/cache/awal-") }
-                for key in awalKeys {
-                    plugins.removeValue(forKey: key)
-                }
-                settings["enabledPlugins"] = plugins
-            }
-
-            // Clean awal- prefixed MCP servers
-            if var mcpServers = settings["mcpServers"] as? [String: Any] {
-                let awalKeys = mcpServers.keys.filter { $0.hasPrefix("awal-") }
-                for key in awalKeys {
-                    mcpServers.removeValue(forKey: key)
-                }
-                settings["mcpServers"] = mcpServers
-            }
-
-            // Clean awal hooks (detect by command path)
-            if var hooks = settings["hooks"] as? [String: Any] {
-                for key in hooks.keys {
-                    if var entries = hooks[key] as? [[String: Any]] {
-                        entries.removeAll { group in
-                            guard let innerHooks = group["hooks"] as? [[String: Any]] else { return false }
-                            return innerHooks.allSatisfy { entry in
-                                (entry["command"] as? String)?.contains(".config/awal/") == true
-                            }
-                        }
-                        hooks[key] = entries.isEmpty ? nil : entries
+                // Clean enabledPlugins (record format: path → true)
+                if var plugins = settings["enabledPlugins"] as? [String: Bool] {
+                    let awalKeys = plugins.keys.filter { $0.contains("/plugins/cache/awal-") }
+                    for key in awalKeys {
+                        plugins.removeValue(forKey: key)
                     }
+                    settings["enabledPlugins"] = plugins
                 }
-                settings["hooks"] = hooks
-            }
 
-            if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
-                try? data.write(to: claudeSettings, options: .atomic)
+                // Clean awal- prefixed MCP servers
+                if var mcpServers = settings["mcpServers"] as? [String: Any] {
+                    let awalKeys = mcpServers.keys.filter { $0.hasPrefix("awal-") }
+                    for key in awalKeys {
+                        mcpServers.removeValue(forKey: key)
+                    }
+                    settings["mcpServers"] = mcpServers
+                }
+
+                // Clean awal hooks (detect by command path)
+                if var hooks = settings["hooks"] as? [String: Any] {
+                    for key in hooks.keys {
+                        if var entries = hooks[key] as? [[String: Any]] {
+                            entries.removeAll { group in
+                                guard let innerHooks = group["hooks"] as? [[String: Any]] else { return false }
+                                return innerHooks.allSatisfy { entry in
+                                    (entry["command"] as? String)?.contains(".config/awal/") == true
+                                }
+                            }
+                            hooks[key] = entries.isEmpty ? nil : entries
+                        }
+                    }
+                    settings["hooks"] = hooks
+                }
+
+                if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: claudeSettings, options: .atomic)
+                }
             }
         }
     }
