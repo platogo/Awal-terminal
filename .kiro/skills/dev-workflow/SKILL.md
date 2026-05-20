@@ -51,7 +51,7 @@ Swift tests (`just test-swift`) require full Xcode.app installed. If unavailable
 | Hook | Checks |
 |------|--------|
 | pre-commit | `cargo fmt --check`, `cargo clippy -- -D warnings` |
-| commit-msg | Message format, no AI mentions, imperative mood |
+| commit-msg | Message format, no AI mentions, conventional prefix |
 | pre-push | Branch name matches allowed patterns |
 
-Install hooks: `bash .githooks/install.sh`
+Install hooks once after cloning: `bash .githooks/install.sh`
