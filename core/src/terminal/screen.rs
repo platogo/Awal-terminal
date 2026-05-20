@@ -841,7 +841,11 @@ impl Screen {
                 self.scrollback_wrapped.push_back(was_wrapped);
 
                 // Migrate row 0 hyperlinks to scrollback using absolute index
+                const SCROLLBACK_HYPERLINK_CAP: usize = 100_000;
                 for (c, url) in row0_hyperlinks {
+                    if self.scrollback_hyperlinks.len() >= SCROLLBACK_HYPERLINK_CAP {
+                        break;
+                    }
                     self.scrollback_hyperlinks.insert((abs_idx, c), url);
                 }
 
