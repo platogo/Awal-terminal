@@ -168,8 +168,8 @@ prevent_sleep = false
 enabled = true
 auto_detect = true
 auto_sync = true
-security_scan = true
-require_hook_approval = true
+# security_scan = true       # on by default
+# hooks always require approval (not configurable)
 remote_control = false
 
 [ai_components.registry.awal-components]

@@ -1,7 +1,4 @@
 import Foundation
-import os.log
-
-private let injectorLog = OSLog(subsystem: "com.awal.terminal", category: "injector")
 
 /// Context returned after AI component injection, including any command modifications needed.
 struct AIComponentContext {
@@ -88,16 +85,9 @@ enum AIComponentInjector {
 
         debugLog("AIComponentInjector: stacks=\(stacks), registries=\(registries.map { $0.name })")
 
-        // Compute disabled and security-blocked components
+        // Compute disabled components (scanner findings are informational only, never block)
         let disabledComponents = config.aiComponentsDisabled
-        var blockedComponents = Set<String>()
-        if config.aiComponentsBlockCritical {
-            for (_, findings) in RegistryManager.shared.scanResults {
-                for finding in findings where finding.severity == .critical {
-                    blockedComponents.insert(finding.componentKey)
-                }
-            }
-        }
+        let blockedComponents = Set<String>()
 
         // Collect hooks for all models
         let rawHooks = AIComponentRegistry.shared.collectHooks(
@@ -105,40 +95,20 @@ enum AIComponentInjector {
             disabledComponents: disabledComponents, blockedComponents: blockedComponents
         )
 
-        // Filter hooks through approval store when enabled
+        // Filter hooks through approval store (always required)
         let hooks: (preSession: [(url: URL, data: Data)], postSession: [(url: URL, data: Data)], beforeCommit: [(url: URL, data: Data)])
-        if config.aiComponentsRequireHookApproval {
-            let store = HookApprovalStore.shared
-            let pre = store.filterApprovedWithData(hooks: rawHooks.preSession)
-            let post = store.filterApprovedWithData(hooks: rawHooks.postSession)
-            let commit = store.filterApprovedWithData(hooks: rawHooks.beforeCommit)
-            hooks = (pre.approved, post.approved, commit.approved)
+        let store = HookApprovalStore.shared
+        let pre = store.filterApprovedWithData(hooks: rawHooks.preSession)
+        let post = store.filterApprovedWithData(hooks: rawHooks.postSession)
+        let commit = store.filterApprovedWithData(hooks: rawHooks.beforeCommit)
+        hooks = (pre.approved, post.approved, commit.approved)
 
-            let allUnapproved = pre.unapproved + post.unapproved + commit.unapproved
-            if !allUnapproved.isEmpty {
-                NotificationCenter.default.post(
-                    name: HookApprovalStore.unapprovedHooksDetectedNotification,
-                    object: nil,
-                    userInfo: ["hooks": allUnapproved]
-                )
-            }
-        } else {
-            func readHooks(_ sources: [(key: String, url: URL)]) -> [(url: URL, data: Data)] {
-                var result: [(url: URL, data: Data)] = []
-                for h in sources {
-                    do {
-                        let data = try Data(contentsOf: h.url)
-                        result.append((url: h.url, data: data))
-                    } catch {
-                        os_log(.error, log: injectorLog, "Failed to read hook: %{public}@ — %{public}@", h.url.lastPathComponent, error.localizedDescription)
-                    }
-                }
-                return result
-            }
-            hooks = (
-                readHooks(rawHooks.preSession),
-                readHooks(rawHooks.postSession),
-                readHooks(rawHooks.beforeCommit)
+        let allUnapproved = pre.unapproved + post.unapproved + commit.unapproved
+        if !allUnapproved.isEmpty {
+            NotificationCenter.default.post(
+                name: HookApprovalStore.unapprovedHooksDetectedNotification,
+                object: nil,
+                userInfo: ["hooks": allUnapproved]
             )
         }
 

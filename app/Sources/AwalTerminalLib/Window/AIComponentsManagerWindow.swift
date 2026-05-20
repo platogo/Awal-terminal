@@ -21,7 +21,14 @@ class AIComponentsManagerWindow: NSWindowController, NSWindowDelegate {
 
     /// Show security findings in a standalone window (callable from the menu bar).
     static func showSecurityFindings(_ findings: [SecurityFinding]) {
-        guard !findings.isEmpty else { return }
+        if findings.isEmpty {
+            let alert = NSAlert.branded()
+            alert.messageText = "No Security Findings"
+            alert.informativeText = "⚠️ This scanner catches common patterns but is not comprehensive. No findings does not mean it's safe. Always review hooks before approving."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 380),
@@ -44,6 +51,15 @@ class AIComponentsManagerWindow: NSWindowController, NSWindowDelegate {
         header.font = .boldSystemFont(ofSize: 13)
         header.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(header)
+
+        // Disclaimer
+        let disclaimer = NSTextField(wrappingLabelWithString:
+            "⚠️ This scanner catches common patterns but is not comprehensive. " +
+            "No findings does not mean it's safe. Always review hooks before approving.")
+        disclaimer.font = .systemFont(ofSize: 11)
+        disclaimer.textColor = .secondaryLabelColor
+        disclaimer.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(disclaimer)
 
         // Scroll view with findings list
         let scrollView = NSScrollView()
@@ -136,9 +152,13 @@ class AIComponentsManagerWindow: NSWindowController, NSWindowDelegate {
             header.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
             header.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
 
+            disclaimer.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            disclaimer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            disclaimer.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10),
+            scrollView.topAnchor.constraint(equalTo: disclaimer.bottomAnchor, constant: 10),
             scrollView.bottomAnchor.constraint(equalTo: dismissBtn.topAnchor, constant: -10),
 
             stackView.widthAnchor.constraint(equalTo: clipView.widthAnchor),
@@ -1229,7 +1249,7 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
                 let idx = self.segmentedControl.selectedSegment
                 return idx >= 0 && idx < self.tabTypes.count && self.tabTypes[idx] == .hook
             }()
-            if isHookTab, AppConfig.shared.aiComponentsRequireHookApproval {
+            if isHookTab {
                 if let url = resolveHookURL(key: item.key) {
                     checkbox.state = HookApprovalStore.shared.isApproved(key: item.key, fileURL: url) ? .on : .off
                 } else {
@@ -1245,16 +1265,12 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
             let cell = NSTextField(labelWithString: "")
             cell.font = .systemFont(ofSize: 12)
             cell.lineBreakMode = .byTruncatingTail
-            // Show security indicator
-            let hasFindings = RegistryManager.shared.scanResults.values
-                .flatMap { $0 }
-                .contains { $0.componentKey == item.key }
             // Show hook approval indicator
             let isHookTab = {
                 let idx = segmentedControl.selectedSegment
                 return idx >= 0 && idx < tabTypes.count && tabTypes[idx] == .hook
             }()
-            if isHookTab, AppConfig.shared.aiComponentsRequireHookApproval {
+            if isHookTab {
                 if let url = resolveHookURL(key: item.key) {
                     let approved = HookApprovalStore.shared.isApproved(key: item.key, fileURL: url)
                     let dot = approved ? "\u{1F7E2} " : "\u{1F7E0} "
@@ -1262,7 +1278,9 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
                 } else {
                     cell.stringValue = "\u{1F7E0} " + item.name
                 }
-            } else if hasFindings {
+            } else if RegistryManager.shared.scanResults.values
+                .flatMap({ $0 })
+                .contains(where: { $0.componentKey == item.key }) {
                 let hasCritical = RegistryManager.shared.scanResults.values
                     .flatMap { $0 }
                     .contains { $0.componentKey == item.key && $0.severity == .critical }
@@ -1314,7 +1332,7 @@ extension AIComponentsManagerWindow: NSTableViewDataSource, NSTableViewDelegate 
             return idx >= 0 && idx < self.tabTypes.count && self.tabTypes[idx] == .hook
         }()
 
-        if isHookTab, AppConfig.shared.aiComponentsRequireHookApproval {
+        if isHookTab {
             if sender.state == .on {
                 // Approve: show the script contents for review
                 if let url = resolveHookURL(key: item.key),
