@@ -424,7 +424,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 tabID: tab.id,
                 title: tab.title,
                 tabColor: tab.tabColor,
-                isDangerMode: false,
+                isDangerMode: tab.isDangerMode,
                 isGenerating: tab.isGenerating,
                 groupID: tab.groupID,
                 groupColor: group?.color,
