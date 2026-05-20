@@ -87,12 +87,13 @@ extension TerminalView {
         }
 
         let timeout = AppConfig.shared.aiComponentsHookTimeout
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async { process.waitUntilExit(); sem.signal() }
-        let timedOut = sem.wait(timeout: .now() + .seconds(timeout)) == .timedOut
-        if timedOut { process.terminate() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(timeout)) {
+            if process.isRunning { process.terminate() }
+        }
+        process.waitUntilExit()
 
         let elapsed = Int((DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000)
+        let timedOut = process.terminationReason == .uncaughtSignal && elapsed >= timeout * 1000
         let code = process.terminationStatus
 
         if timedOut {
