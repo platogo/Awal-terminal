@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let injectorLog = OSLog(subsystem: "com.awal.terminal", category: "injector")
 
 /// Context returned after AI component injection, including any command modifications needed.
 struct AIComponentContext {
@@ -9,9 +12,9 @@ struct AIComponentContext {
     let agentCount: Int
     let mcpServerCount: Int
     let commandModifier: ((String) -> String)?
-    let preSessionHooks: [URL]
-    let postSessionHooks: [URL]
-    let beforeCommitHooks: [URL]
+    let preSessionHooks: [(url: URL, data: Data)]
+    let postSessionHooks: [(url: URL, data: Data)]
+    let beforeCommitHooks: [(url: URL, data: Data)]
 
     var totalCount: Int { skillCount + ruleCount + promptCount + agentCount + mcpServerCount }
 }
@@ -103,12 +106,12 @@ enum AIComponentInjector {
         )
 
         // Filter hooks through approval store when enabled
-        let hooks: (preSession: [URL], postSession: [URL], beforeCommit: [URL])
+        let hooks: (preSession: [(url: URL, data: Data)], postSession: [(url: URL, data: Data)], beforeCommit: [(url: URL, data: Data)])
         if config.aiComponentsRequireHookApproval {
             let store = HookApprovalStore.shared
-            let pre = store.filterApproved(hooks: rawHooks.preSession)
-            let post = store.filterApproved(hooks: rawHooks.postSession)
-            let commit = store.filterApproved(hooks: rawHooks.beforeCommit)
+            let pre = store.filterApprovedWithData(hooks: rawHooks.preSession)
+            let post = store.filterApprovedWithData(hooks: rawHooks.postSession)
+            let commit = store.filterApprovedWithData(hooks: rawHooks.beforeCommit)
             hooks = (pre.approved, post.approved, commit.approved)
 
             let allUnapproved = pre.unapproved + post.unapproved + commit.unapproved
@@ -120,10 +123,22 @@ enum AIComponentInjector {
                 )
             }
         } else {
+            func readHooks(_ sources: [(key: String, url: URL)]) -> [(url: URL, data: Data)] {
+                var result: [(url: URL, data: Data)] = []
+                for h in sources {
+                    do {
+                        let data = try Data(contentsOf: h.url)
+                        result.append((url: h.url, data: data))
+                    } catch {
+                        os_log(.error, log: injectorLog, "Failed to read hook: %{public}@ — %{public}@", h.url.lastPathComponent, error.localizedDescription)
+                    }
+                }
+                return result
+            }
             hooks = (
-                rawHooks.preSession.map(\.url),
-                rawHooks.postSession.map(\.url),
-                rawHooks.beforeCommit.map(\.url)
+                readHooks(rawHooks.preSession),
+                readHooks(rawHooks.postSession),
+                readHooks(rawHooks.beforeCommit)
             )
         }
 
@@ -191,7 +206,7 @@ enum AIComponentInjector {
         registries: [RegistryConfig],
         disabledComponents: Set<String>,
         blockedComponents: Set<String>,
-        hooks: (preSession: [URL], postSession: [URL], beforeCommit: [URL])
+        hooks: (preSession: [(url: URL, data: Data)], postSession: [(url: URL, data: Data)], beforeCommit: [(url: URL, data: Data)])
     ) -> AIComponentContext {
         let result = AIComponentRegistry.shared.assemble(
             stacks: stacks, registries: registries,
@@ -263,7 +278,7 @@ enum AIComponentInjector {
 
         // Write hooks to Claude settings
         if !hooks.preSession.isEmpty || !hooks.postSession.isEmpty || !hooks.beforeCommit.isEmpty {
-            writeClaudeHooks(settingsFile: claudeSettings, preHooks: hooks.preSession, postHooks: hooks.postSession, beforeCommitHooks: hooks.beforeCommit)
+            writeClaudeHooks(settingsFile: claudeSettings, preHooks: hooks.preSession.map(\.url), postHooks: hooks.postSession.map(\.url), beforeCommitHooks: hooks.beforeCommit.map(\.url))
         }
 
         return AIComponentContext(
@@ -444,7 +459,7 @@ enum AIComponentInjector {
         registries: [RegistryConfig],
         disabledComponents: Set<String>,
         blockedComponents: Set<String>,
-        hooks: (preSession: [URL], postSession: [URL], beforeCommit: [URL])
+        hooks: (preSession: [(url: URL, data: Data)], postSession: [(url: URL, data: Data)], beforeCommit: [(url: URL, data: Data)])
     ) -> AIComponentContext {
         let result = AIComponentRegistry.shared.assemble(
             stacks: stacks, registries: registries,
@@ -582,7 +597,7 @@ enum AIComponentInjector {
         flagName: String?,
         disabledComponents: Set<String>,
         blockedComponents: Set<String>,
-        hooks: (preSession: [URL], postSession: [URL], beforeCommit: [URL])
+        hooks: (preSession: [(url: URL, data: Data)], postSession: [(url: URL, data: Data)], beforeCommit: [(url: URL, data: Data)])
     ) -> AIComponentContext? {
         let components = AIComponentRegistry.shared.listActiveComponents(
             stacks: stacks, registries: registries, disabledComponents: disabledComponents

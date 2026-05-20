@@ -626,8 +626,8 @@ extension TerminalView {
                     if let ctx = aiComponentContext {
                         self.postSessionHooks = ctx.postSessionHooks
                         self.beforeCommitHooks = ctx.beforeCommitHooks
-                        for hookURL in ctx.preSessionHooks {
-                            self.executeHookScript(hookURL, workingDir: dir)
+                        for hook in ctx.preSessionHooks {
+                            self.executeHookScript(hook.url, verifiedData: hook.data, workingDir: dir)
                         }
                     }
                 }

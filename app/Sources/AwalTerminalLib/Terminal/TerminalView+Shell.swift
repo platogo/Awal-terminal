@@ -26,8 +26,8 @@ extension TerminalView {
     }
 
     /// Execute a hook script synchronously in a sandboxed subprocess.
-    func executeHookScript(_ scriptURL: URL, workingDir: String?) {
-        runSandboxedHook(scriptURL, workingDir: workingDir)
+    func executeHookScript(_ scriptURL: URL, verifiedData: Data, workingDir: String?) {
+        runSandboxedHook(scriptURL, verifiedData: verifiedData, workingDir: workingDir)
     }
 
     /// Execute post-session hooks asynchronously in sandboxed subprocesses.
@@ -37,8 +37,8 @@ extension TerminalView {
         let dir = lastWorkingDir
         postSessionHooks = []
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            for hookURL in hooks {
-                self?.runSandboxedHook(hookURL, workingDir: dir)
+            for hook in hooks {
+                self?.runSandboxedHook(hook.url, verifiedData: hook.data, workingDir: dir)
             }
         }
     }
@@ -46,7 +46,7 @@ extension TerminalView {
     // MARK: - Sandboxed Hook Execution
 
     @discardableResult
-    private func runSandboxedHook(_ scriptURL: URL, workingDir: String?) -> Int32 {
+    private func runSandboxedHook(_ scriptURL: URL, verifiedData: Data, workingDir: String?) -> Int32 {
         let dir = workingDir ?? FileManager.default.temporaryDirectory.path
 
         // Allowlist: only printable ASCII (0x20-0x7E) excluding ", (, ), \
@@ -63,13 +63,13 @@ extension TerminalView {
             return -1
         }
 
-        // TOCTOU mitigation: copy hook to a secure staging directory
+        // Write verified data to a secure staging directory (eliminates TOCTOU)
         let stagingDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let stagedScript: URL
         do {
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-            stagedScript = stagingDir.appendingPathComponent(scriptURL.lastPathComponent)
-            try FileManager.default.copyItem(at: scriptURL, to: stagedScript)
+            stagedScript = stagingDir.appendingPathComponent(UUID().uuidString + ".sh")
+            try verifiedData.write(to: stagedScript, options: .atomic)
         } catch {
             os_log(.error, log: hookLog, "Hook staging failed: %{public}@", error.localizedDescription)
             logHookAudit(scriptURL, entry: "SANDBOX_DENIED", detail: "staging failed: \(error.localizedDescription)")

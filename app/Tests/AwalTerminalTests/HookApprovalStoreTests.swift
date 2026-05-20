@@ -71,6 +71,49 @@ final class HookApprovalStoreTests: XCTestCase {
         XCTAssertEqual(result.unapproved[0].key, "hook2")
     }
 
+    func testIsApproved_withData_matchingHash_returnsTrue() {
+        store.approve(key: "test", fileURL: hookFile)
+        let data = try! Data(contentsOf: hookFile)
+        XCTAssertTrue(store.isApproved(key: "test", data: data))
+    }
+
+    func testIsApproved_withData_modifiedData_returnsFalse() {
+        store.approve(key: "test", fileURL: hookFile)
+        let modifiedData = "#!/bin/bash\necho evil".data(using: .utf8)!
+        XCTAssertFalse(store.isApproved(key: "test", data: modifiedData))
+    }
+
+    func testFilterApprovedWithData_returnsVerifiedData() {
+        let hook2 = tempDir.appendingPathComponent("hook2.sh")
+        try! "#!/bin/bash\necho two".write(to: hook2, atomically: true, encoding: .utf8)
+
+        store.approve(key: "hook1", fileURL: hookFile)
+
+        let hooks: [(key: String, url: URL)] = [
+            (key: "hook1", url: hookFile),
+            (key: "hook2", url: hook2),
+        ]
+
+        let result = store.filterApprovedWithData(hooks: hooks)
+        XCTAssertEqual(result.approved.count, 1)
+        XCTAssertEqual(result.approved[0].url, hookFile)
+        XCTAssertEqual(result.approved[0].data, try! Data(contentsOf: hookFile))
+        XCTAssertEqual(result.unapproved.count, 1)
+        XCTAssertEqual(result.unapproved[0].key, "hook2")
+    }
+
+    func testFilterApprovedWithData_fileModifiedAfterApproval_returnsUnapproved() {
+        store.approve(key: "test", fileURL: hookFile)
+
+        // Modify the file after approval
+        try! "#!/bin/bash\necho tampered".write(to: hookFile, atomically: true, encoding: .utf8)
+
+        let hooks: [(key: String, url: URL)] = [(key: "test", url: hookFile)]
+        let result = store.filterApprovedWithData(hooks: hooks)
+        XCTAssertEqual(result.approved.count, 0)
+        XCTAssertEqual(result.unapproved.count, 1)
+    }
+
     func testAuditLog_recordsEvents() {
         store.approve(key: "myHook", fileURL: hookFile)
         store.revoke(key: "myHook")
