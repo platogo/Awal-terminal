@@ -313,6 +313,14 @@ class ContextPopoverController: NSViewController {
         ])
         yOffset += barHeight + 6
 
+        // Compaction warning
+        if snap.fraction >= 0.8 {
+            addLabel("⚠ Approaching compaction threshold — context may be auto-compacted soon",
+                     font: monoFontSmall,
+                     color: NSColor(red: 240.0/255.0, green: 100.0/255.0, blue: 70.0/255.0, alpha: 1.0))
+            addSmallGap()
+        }
+
         addSectionGap()
 
         // Estimated usage by category
@@ -334,15 +342,17 @@ class ContextPopoverController: NSViewController {
             return "\(padded) \(tokenStr.padding(toLength: 6, withPad: " ", startingAt: 0)) (\(pctStr))"
         }
 
-        addLabel(categoryLine("\u{26C1}", "System + Messages:", snap.systemMessagesTokens),
-                 font: monoFontSmall, color: textColor)
-        addLabel(categoryLine("\u{26C1}", "Memory files:", snap.memoryTokens),
-                 font: monoFontSmall, color: textColor)
-        addLabel(categoryLine("\u{26C1}", "Skills & Rules:", snap.componentTokens),
-                 font: monoFontSmall, color: textColor)
-        addLabel(categoryLine("\u{26F6}", "Free space:", snap.freeSpace),
+        addLabel(categoryLine("●", "System + Messages:", snap.systemMessagesTokens),
+                 font: monoFontSmall, color: ContextSegmentedBarView.systemColor)
+        addLabel(categoryLine("●", "Skills & Rules:", snap.componentTokens),
+                 font: monoFontSmall, color: ContextSegmentedBarView.skillsColor)
+        addLabel(categoryLine("●", "Conversation:", max(snap.systemMessagesTokens - snap.memoryTokens, 0)),
+                 font: monoFontSmall, color: ContextSegmentedBarView.conversationColor)
+        addLabel(categoryLine("●", "Tool Results:", tokenTracker.contextBreakdown.toolResults),
+                 font: monoFontSmall, color: ContextSegmentedBarView.toolResultsColor)
+        addLabel(categoryLine("○", "Free space:", snap.freeSpace),
                  font: monoFontSmall, color: NSColor(red: 80.0/255.0, green: 200.0/255.0, blue: 120.0/255.0, alpha: 0.8))
-        addLabel(categoryLine("\u{26DD}", "Autocompact buffer:", snap.autocompactBuffer),
+        addLabel(categoryLine("○", "Autocompact buffer:", snap.autocompactBuffer),
                  font: monoFontSmall, color: dimColor)
 
         addSectionGap()

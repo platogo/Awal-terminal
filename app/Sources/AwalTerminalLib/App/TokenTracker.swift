@@ -1,5 +1,15 @@
 import Foundation
 
+/// Breakdown of context window usage by category.
+struct ContextBreakdown {
+    var systemPrompt: Int = 0
+    var skills: Int = 0
+    var conversation: Int = 0
+    var toolResults: Int = 0
+
+    var total: Int { systemPrompt + skills + conversation + toolResults }
+}
+
 class TokenTracker {
 
     static let shared = TokenTracker()
@@ -18,6 +28,15 @@ class TokenTracker {
     private(set) var toolCalls: [String] = []
     private(set) var modelUsed: String = ""
     private(set) var sessionId: String = ""
+
+    /// Context breakdown by category (estimated).
+    private(set) var contextBreakdown: ContextBreakdown = ContextBreakdown()
+
+    /// Sparkline history: context usage (as fraction 0..1) per turn.
+    private(set) var sparklineHistory: [Double] = []
+
+    /// Maximum sparkline data points to retain.
+    private static let maxSparklinePoints = 50
 
     private var lastFile: String = ""
     private var lastFileSize: UInt64 = 0
@@ -68,12 +87,23 @@ class TokenTracker {
         totalOutput = outputChars / 4
         cumulativeInputFull = inputChars / 4
         modelUsed = "Kiro"
+        // Estimate breakdown: ACP doesn't provide granular data, so approximate
+        contextBreakdown.conversation = currentInput
         lock.unlock()
     }
 
     func incrementTurns() {
         lock.lock()
         conversationTurns += 1
+        // Record sparkline data point
+        let contextWindow = ModelCatalog.find(modelUsed)?.contextWindow
+            ?? ModelCatalog.find("Claude")?.contextWindow ?? 200_000
+        let fraction = contextWindow > 0
+            ? min(Double(currentInput) / Double(contextWindow), 1.0) : 0.0
+        sparklineHistory.append(fraction)
+        if sparklineHistory.count > Self.maxSparklinePoints {
+            sparklineHistory.removeFirst()
+        }
         lock.unlock()
     }
 
@@ -129,6 +159,8 @@ class TokenTracker {
         var turns = 0
         var tools: [String] = []
         var model = ""
+        var toolResultChars = 0  // chars in tool_result messages (for breakdown)
+        var perTurnFractions: [Double] = []
         let sessionFile = (latestPath as NSString).lastPathComponent
         let sid = (sessionFile as NSString).deletingPathExtension
 
@@ -147,6 +179,17 @@ class TokenTracker {
             }
 
             let type = json["type"] as? String ?? ""
+
+            if type == "tool_result" {
+                // Estimate tool result size from content
+                if let content = json["content"] as? [[String: Any]] {
+                    for block in content {
+                        if let text = block["text"] as? String {
+                            toolResultChars += text.count
+                        }
+                    }
+                }
+            }
 
             if type == "assistant" {
                 turns += 1
@@ -173,6 +216,12 @@ class TokenTracker {
                         inputFullTotal += input + cacheCreate
                         cacheReadTotal += cacheRead
                         outputTotal += output
+
+                        // Record sparkline data point
+                        let ctxWindow = ModelCatalog.find("Claude")?.contextWindow ?? 200_000
+                        let frac = ctxWindow > 0
+                            ? min(Double(lastTurnInput) / Double(ctxWindow), 1.0) : 0.0
+                        perTurnFractions.append(frac)
                     }
 
                     // Extract tool use from content blocks
@@ -201,6 +250,16 @@ class TokenTracker {
         toolCalls = tools
         modelUsed = model
         sessionId = sid
+        // Compute breakdown estimate
+        let toolTokens = toolResultChars / 4
+        let remaining = max(lastTurnInput - toolTokens, 0)
+        // Heuristic: system prompt ~15% of non-tool context, skills ~10%, rest is conversation
+        contextBreakdown.toolResults = toolTokens
+        contextBreakdown.systemPrompt = remaining / 4
+        contextBreakdown.skills = remaining / 6
+        contextBreakdown.conversation = max(remaining - contextBreakdown.systemPrompt - contextBreakdown.skills, 0)
+        // Sparkline: keep last N points
+        sparklineHistory = Array(perTurnFractions.suffix(Self.maxSparklinePoints))
         lock.unlock()
     }
 
@@ -222,6 +281,8 @@ class TokenTracker {
         lastFile = ""
         lastFileSize = 0
         sessionStart = Date()
+        contextBreakdown = ContextBreakdown()
+        sparklineHistory = []
         lock.unlock()
     }
 
