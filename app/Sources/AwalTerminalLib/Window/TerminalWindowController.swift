@@ -26,6 +26,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     /// Exposed for keyboard shortcut interception from TerminalView.
     var toolCallStackForPermissions: ToolCallStackView? { toolCallStack }
 
+    /// Exposed for keyboard shortcut interception from TerminalView.
+    var activeDiffReview: DiffReviewController? {
+        guard let popover = diffReviewPopover, popover.isShown else { return nil }
+        return popover.contentViewController as? DiffReviewController
+    }
+
     private(set) var tabs: [TabState] = []
     private(set) var tabGroups: [TabGroup] = []
     private(set) var activeTabIndex: Int = 0
@@ -2415,14 +2421,78 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self else { return }
             // Store write data for when permission is approved
             self.pendingFsWrites[requestId] = (path: path, content: content)
-            // Route through permission system
-            let request = ACPClient.PermissionRequest(
-                requestId: requestId, toolCallId: "", toolName: "fs/write_text_file",
-                description: "Write to \(path)", kind: .write
-            )
-            self.ensureToolCallStack()
-            self.toolCallStack?.addPermissionRequest(request)
+
+            // Track agent changes for the side panel changes tree
+            let cwd = self.activeTab.statusBar.currentPath ?? ""
+            self.activeTab.agentChanges.recordWrite(requestId: requestId, path: path, content: content, cwd: cwd) { [weak self] in
+                guard let self else { return }
+                self.updateAgentChangesTree()
+                self.showDiffReview(requestId: requestId, path: path, content: content, cwd: cwd)
+            }
         }
+    }
+
+    private var diffReviewPopover: NSPopover?
+
+    private func showDiffReview(requestId: UInt64, path: String, content: String, cwd: String) {
+        // Dismiss existing diff review if any
+        diffReviewPopover?.performClose(nil)
+
+        let fullPath = path.hasPrefix("/") ? path : (cwd as NSString).appendingPathComponent(path)
+        let original = try? String(contentsOfFile: fullPath, encoding: .utf8)
+        let diffText = activeTab.agentChanges.modifiedFiles[path]?.diffText ?? ""
+
+        let vc = DiffReviewController(
+            filePath: path,
+            originalContent: original ?? "",
+            newContent: content,
+            diffText: diffText
+        )
+        vc.onResolve = { [weak self] finalContent in
+            guard let self else { return }
+            self.pendingFsWrites.removeValue(forKey: requestId)
+            self.diffReviewPopover = nil
+            // Write the resolved content
+            DispatchQueue.global(qos: .userInitiated).async {
+                let success: Bool
+                do {
+                    try finalContent.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                    success = true
+                } catch {
+                    success = false
+                }
+                DispatchQueue.main.async {
+                    self.activeTab.acpClient?.respondFsWrite(requestId: requestId, success: success)
+                    self.activeTab.agentChanges.removeFile(path)
+                    self.updateAgentChangesTree()
+                }
+            }
+        }
+        vc.onDismiss = { [weak self] in
+            guard let self else { return }
+            self.pendingFsWrites.removeValue(forKey: requestId)
+            self.diffReviewPopover = nil
+            self.activeTab.acpClient?.respondFsWrite(requestId: requestId, success: false)
+            self.activeTab.agentChanges.removeFile(path)
+            self.updateAgentChangesTree()
+        }
+
+        let popover = NSPopover()
+        popover.contentViewController = vc
+        popover.behavior = .applicationDefined
+        popover.contentSize = NSSize(width: 600, height: 450)
+        vc.parentPopover = popover
+
+        diffReviewPopover = popover
+
+        // Show relative to the side panel
+        let panel = activeTab.aiSidePanel
+        popover.show(relativeTo: panel.bounds, of: panel, preferredEdge: .minX)
+    }
+
+    private func updateAgentChangesTree() {
+        let changes = activeTab.agentChanges.asGitFileChanges()
+        activeTab.aiSidePanel.updateGitChanges(changes)
     }
 
     private func ensureToolCallStack() {
