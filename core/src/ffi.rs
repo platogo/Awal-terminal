@@ -935,6 +935,7 @@ pub extern "C" fn at_surface_get_input_line(surface: *const ATSurface) -> *mut c
 // --- ACP Client ---
 
 use crate::acp::client::{AcpClient, AcpState};
+use crate::acp::diff;
 use crate::acp::reader::AcpEvent;
 
 /// Opaque handle to an ACP client.
@@ -1220,6 +1221,143 @@ pub extern "C" fn at_acp_destroy(client: *mut ATAcpClient) {
     if !client.is_null() {
         unsafe {
             drop(Box::from_raw(client));
+        }
+    }
+}
+
+// --- Diff Parsing ---
+
+/// A parsed diff hunk exposed to C.
+#[repr(C)]
+pub struct ATDiffHunk {
+    pub header: *mut c_char,
+    pub old_start: u32,
+    pub old_count: u32,
+    pub new_start: u32,
+    pub new_count: u32,
+    pub lines: *mut ATDiffLine,
+    pub line_count: u32,
+}
+
+/// A single diff line exposed to C.
+#[repr(C)]
+pub struct ATDiffLine {
+    pub kind: u8, // 0=Context, 1=Add, 2=Remove
+    pub content: *mut c_char,
+}
+
+/// Parsed diff result.
+#[repr(C)]
+pub struct ATDiffResult {
+    pub hunks: *mut ATDiffHunk,
+    pub hunk_count: u32,
+}
+
+/// Parse a unified diff into hunks. Caller must free with `at_acp_free_diff_result`.
+#[no_mangle]
+pub extern "C" fn at_acp_parse_diff(diff_text: *const c_char) -> *mut ATDiffResult {
+    if diff_text.is_null() {
+        return std::ptr::null_mut();
+    }
+    let text = unsafe { std::ffi::CStr::from_ptr(diff_text).to_str().unwrap_or("") };
+    let hunks = diff::parse_hunks(text);
+
+    let c_hunks: Vec<ATDiffHunk> = hunks
+        .into_iter()
+        .map(|h| {
+            let lines: Vec<ATDiffLine> = h
+                .lines
+                .iter()
+                .map(|l| ATDiffLine {
+                    kind: l.kind as u8,
+                    content: string_to_c(&l.content),
+                })
+                .collect();
+            let line_count = lines.len() as u32;
+            let lines_ptr = if lines.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                let mut boxed = lines.into_boxed_slice();
+                let ptr = boxed.as_mut_ptr();
+                std::mem::forget(boxed);
+                ptr
+            };
+            ATDiffHunk {
+                header: string_to_c(&h.header),
+                old_start: h.old_start,
+                old_count: h.old_count,
+                new_start: h.new_start,
+                new_count: h.new_count,
+                lines: lines_ptr,
+                line_count,
+            }
+        })
+        .collect();
+
+    let hunk_count = c_hunks.len() as u32;
+    let hunks_ptr = if c_hunks.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        let mut boxed = c_hunks.into_boxed_slice();
+        let ptr = boxed.as_mut_ptr();
+        std::mem::forget(boxed);
+        ptr
+    };
+
+    Box::into_raw(Box::new(ATDiffResult {
+        hunks: hunks_ptr,
+        hunk_count,
+    }))
+}
+
+/// Apply selected hunks to original content. Returns new content string (caller frees with `at_free_string`).
+#[no_mangle]
+pub extern "C" fn at_acp_apply_hunks(
+    original: *const c_char,
+    diff_text: *const c_char,
+    accepted: *const bool,
+    accepted_count: u32,
+) -> *mut c_char {
+    if original.is_null() || diff_text.is_null() || accepted.is_null() {
+        return std::ptr::null_mut();
+    }
+    let orig = unsafe { std::ffi::CStr::from_ptr(original).to_str().unwrap_or("") };
+    let diff = unsafe { std::ffi::CStr::from_ptr(diff_text).to_str().unwrap_or("") };
+    let acc = unsafe { slice::from_raw_parts(accepted, accepted_count as usize) };
+
+    let hunks = diff::parse_hunks(diff);
+    let result = diff::apply_hunks(orig, &hunks, acc);
+    string_to_c(&result)
+}
+
+/// Free a diff result returned by `at_acp_parse_diff`.
+#[no_mangle]
+pub extern "C" fn at_acp_free_diff_result(result: *mut ATDiffResult) {
+    if result.is_null() {
+        return;
+    }
+    unsafe {
+        let res = Box::from_raw(result);
+        if !res.hunks.is_null() && res.hunk_count > 0 {
+            let hunks =
+                Vec::from_raw_parts(res.hunks, res.hunk_count as usize, res.hunk_count as usize);
+            for hunk in hunks {
+                if !hunk.header.is_null() {
+                    drop(CString::from_raw(hunk.header));
+                }
+                if !hunk.lines.is_null() && hunk.line_count > 0 {
+                    let lines = Vec::from_raw_parts(
+                        hunk.lines,
+                        hunk.line_count as usize,
+                        hunk.line_count as usize,
+                    );
+                    for line in lines {
+                        if !line.content.is_null() {
+                            drop(CString::from_raw(line.content));
+                        }
+                    }
+                }
+            }
         }
     }
 }
