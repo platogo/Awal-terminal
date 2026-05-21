@@ -725,8 +725,8 @@ pub extern "C" fn at_surface_search(
         return 0;
     }
     let query_str = unsafe { std::ffi::CStr::from_ptr(query).to_str().unwrap_or("") };
-    let results = surface.screen.search(query_str);
-    let count = results.len().min(max_results as usize);
+    let results = surface.screen.search(query_str, max_results as usize);
+    let count = results.len();
     let out_slice = unsafe { slice::from_raw_parts_mut(out, count) };
     for (i, (col, row)) in results.iter().take(count).enumerate() {
         out_slice[i] = ATSearchResult {
