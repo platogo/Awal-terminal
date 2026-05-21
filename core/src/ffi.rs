@@ -982,10 +982,18 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                 AcpEvent::Initialized => (0u8, std::ptr::null_mut(), std::ptr::null_mut()),
                 AcpEvent::SessionCreated(id) => (1, string_to_c(id), std::ptr::null_mut()),
                 AcpEvent::TextChunk(t) => (2, string_to_c(t), std::ptr::null_mut()),
-                AcpEvent::ToolCall { id, title, status } => (
+                AcpEvent::ToolCall {
+                    id,
+                    title,
+                    kind,
+                    status,
+                } => (
                     3,
                     string_to_c(title),
-                    string_to_c(&format!("{id}\t{status}")),
+                    string_to_c(&format!(
+                        "{id}\t{status}\t{}",
+                        kind.as_deref().unwrap_or("")
+                    )),
                 ),
                 AcpEvent::ToolCallUpdate {
                     id,

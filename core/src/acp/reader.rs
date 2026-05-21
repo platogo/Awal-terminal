@@ -17,6 +17,7 @@ pub enum AcpEvent {
     ToolCall {
         id: String,
         title: String,
+        kind: Option<String>,
         status: String,
     },
     ToolCallUpdate {
@@ -105,11 +106,12 @@ fn parse_message(
                 SessionUpdate::ToolCall {
                     tool_call_id,
                     title,
+                    kind,
                     status,
-                    ..
                 } => Some(AcpEvent::ToolCall {
                     id: tool_call_id,
                     title,
+                    kind,
                     status,
                 }),
                 SessionUpdate::ToolCallUpdate {

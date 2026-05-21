@@ -131,7 +131,6 @@ pub enum SessionUpdate {
         #[serde(rename = "toolCallId")]
         tool_call_id: String,
         title: String,
-        #[allow(dead_code)]
         kind: Option<String>,
         status: String,
     },
