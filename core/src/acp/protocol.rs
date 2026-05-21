@@ -143,6 +143,36 @@ pub enum SessionUpdate {
     TurnEnd,
 }
 
+// --- Permission request (server-to-client) ---
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestPermissionParams {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub description: String,
+    pub kind: Option<String>,
+}
+
+// --- JSON-RPC response (outgoing) ---
+
+#[derive(Serialize)]
+pub struct JsonRpcResponseOut {
+    pub jsonrpc: &'static str,
+    pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcErrorOut>,
+}
+
+#[derive(Serialize)]
+pub struct JsonRpcErrorOut {
+    pub code: i64,
+    pub message: String,
+}
+
 // --- Incoming message parsing ---
 
 /// A raw line from stdout can be either a response (has `id`) or a notification (has `method`, no `id`).

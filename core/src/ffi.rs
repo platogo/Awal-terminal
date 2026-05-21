@@ -942,7 +942,8 @@ pub struct ATAcpClient(AcpClient);
 
 /// C-compatible ACP event.
 /// event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
-///             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited
+///             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
+///             8=PermissionRequest
 #[repr(C)]
 pub struct ATAcpEvent {
     pub event_type: u8,
@@ -1013,6 +1014,20 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     string_to_c(&code.map_or("".to_string(), |c| c.to_string())),
                     std::ptr::null_mut(),
                 ),
+                AcpEvent::PermissionRequest {
+                    request_id,
+                    tool_call_id,
+                    tool_name,
+                    description,
+                    kind,
+                } => (
+                    8,
+                    string_to_c(description),
+                    string_to_c(&format!(
+                        "{request_id}\t{tool_call_id}\t{tool_name}\t{}",
+                        kind.as_deref().unwrap_or("")
+                    )),
+                ),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1043,6 +1058,20 @@ pub extern "C" fn at_acp_send_prompt(client: *mut ATAcpClient, text: *const c_ch
 pub extern "C" fn at_acp_cancel(client: *mut ATAcpClient) -> i32 {
     let client = mut_ref_or!(client, -1);
     match client.0.cancel() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Respond to a permission request. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_permission(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    approved: bool,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.send_permission_response(request_id, approved) {
         Ok(()) => 0,
         Err(_) => -1,
     }

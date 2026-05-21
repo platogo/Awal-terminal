@@ -5,8 +5,8 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use crate::acp::protocol::{
-    InitializeResult, RawMessage, SessionNewResult, SessionPromptResult, SessionUpdate,
-    SessionUpdateParams,
+    InitializeResult, RawMessage, RequestPermissionParams, SessionNewResult, SessionPromptResult,
+    SessionUpdate, SessionUpdateParams,
 };
 
 /// Events produced by the ACP reader thread.
@@ -27,6 +27,13 @@ pub enum AcpEvent {
     },
     TurnEnd {
         stop_reason: String,
+    },
+    PermissionRequest {
+        request_id: u64,
+        tool_call_id: String,
+        tool_name: String,
+        description: String,
+        kind: Option<String>,
     },
     Error(String),
     ProcessExited(Option<i32>),
@@ -70,6 +77,23 @@ fn parse_message(
     msg: RawMessage,
     pending_methods: &std::sync::Mutex<std::collections::HashMap<u64, String>>,
 ) -> Option<AcpEvent> {
+    // Server-to-client request: has both `id` and `method`
+    if let (Some(id), Some(method)) = (msg.id, msg.method.as_ref()) {
+        match method.as_str() {
+            "session/request_permission" => {
+                let params: RequestPermissionParams = serde_json::from_value(msg.params?).ok()?;
+                return Some(AcpEvent::PermissionRequest {
+                    request_id: id,
+                    tool_call_id: params.tool_call_id,
+                    tool_name: params.tool_name,
+                    description: params.description,
+                    kind: params.kind,
+                });
+            }
+            _ => return None,
+        }
+    }
+
     if let Some(id) = msg.id {
         // This is a response to one of our requests
         let method = pending_methods.lock().ok()?.remove(&id)?;
@@ -196,6 +220,32 @@ mod tests {
         match event {
             AcpEvent::Error(e) => assert!(e.contains("bad request")),
             _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
+    fn parse_permission_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"sessionId":"s1","toolCallId":"tc1","toolName":"write","description":"Write to /tmp/foo","kind":"write"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::PermissionRequest {
+                request_id,
+                tool_call_id,
+                tool_name,
+                description,
+                kind,
+            } => {
+                assert_eq!(request_id, 42);
+                assert_eq!(tool_call_id, "tc1");
+                assert_eq!(tool_name, "write");
+                assert_eq!(description, "Write to /tmp/foo");
+                assert_eq!(kind.as_deref(), Some("write"));
+            }
+            _ => panic!("expected PermissionRequest"),
         }
     }
 }

@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
-    SessionNewParams, SessionPromptParams,
+    JsonRpcResponseOut, SessionNewParams, SessionPromptParams,
 };
 use crate::acp::reader::{spawn_reader, AcpEvent};
 
@@ -119,6 +119,26 @@ impl AcpClient {
     /// Cancel the current operation by killing the child process.
     pub fn cancel(&mut self) -> Result<(), String> {
         self.kill();
+        Ok(())
+    }
+
+    /// Send a permission response back to kiro-cli.
+    pub fn send_permission_response(
+        &mut self,
+        request_id: u64,
+        approved: bool,
+    ) -> Result<(), String> {
+        let resp = JsonRpcResponseOut {
+            jsonrpc: "2.0",
+            id: request_id,
+            result: Some(serde_json::json!({ "approved": approved })),
+            error: None,
+        };
+        let line = serde_json::to_string(&resp).map_err(|e| e.to_string())?;
+        writeln!(self.stdin, "{line}").map_err(|e| format!("Write failed: {e}"))?;
+        self.stdin
+            .flush()
+            .map_err(|e| format!("Flush failed: {e}"))?;
         Ok(())
     }
 

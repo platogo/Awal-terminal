@@ -265,6 +265,19 @@ extension TerminalView {
     }
 
     func handleTerminalKey(_ event: NSEvent) {
+        // Intercept Enter/Esc for pending permission approvals
+        let permMods = event.modifierFlags.intersection([.command, .control, .option])
+        if permMods.isEmpty,
+           let wc = window?.windowController as? TerminalWindowController,
+           let stack = wc.toolCallStackForPermissions,
+           stack.hasPendingPermissions {
+            if event.keyCode == 36 { // Return
+                if stack.handlePermissionKey(isEnter: true) { return }
+            } else if event.keyCode == 53 { // Escape
+                if stack.handlePermissionKey(isEnter: false) { return }
+            }
+        }
+
         guard let s = surface else { return }
 
         let modFlags = event.modifierFlags
