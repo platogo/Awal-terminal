@@ -12,7 +12,8 @@ class RemoteControlPopoverView: NSViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 320))
+        let trusted = isURLTrusted(sessionURL)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: trusted ? 320 : 350))
 
         let titleLabel = NSTextField(labelWithString: "Remote Control")
         titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
@@ -26,6 +27,18 @@ class RemoteControlPopoverView: NSViewController {
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(subtitleLabel)
 
+        var warningLabel: NSTextField?
+        if !trusted {
+            let warning = NSTextField(labelWithString: "⚠️ Unrecognized URL — verify before scanning")
+            warning.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            warning.textColor = .systemOrange
+            warning.lineBreakMode = .byWordWrapping
+            warning.maximumNumberOfLines = 0
+            warning.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(warning)
+            warningLabel = warning
+        }
+
         let qrImageView = NSImageView()
         qrImageView.translatesAutoresizingMaskIntoConstraints = false
         qrImageView.imageScaling = .scaleProportionallyUpOrDown
@@ -35,8 +48,10 @@ class RemoteControlPopoverView: NSViewController {
         container.addSubview(qrImageView)
 
         let urlField = NSTextField(wrappingLabelWithString: sessionURL)
-        urlField.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        urlField.textColor = .secondaryLabelColor
+        urlField.font = trusted
+            ? NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+            : NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        urlField.textColor = trusted ? .secondaryLabelColor : .labelColor
         urlField.isSelectable = true
         urlField.alignment = .center
         urlField.translatesAutoresizingMaskIntoConstraints = false
@@ -49,6 +64,18 @@ class RemoteControlPopoverView: NSViewController {
         copyButton.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(copyButton)
 
+        let qrTopAnchor: NSLayoutYAxisAnchor
+        if let warning = warningLabel {
+            qrTopAnchor = warning.bottomAnchor
+            NSLayoutConstraint.activate([
+                warning.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 8),
+                warning.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+                warning.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            ])
+        } else {
+            qrTopAnchor = subtitleLabel.bottomAnchor
+        }
+
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
             titleLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
@@ -56,7 +83,7 @@ class RemoteControlPopoverView: NSViewController {
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
             subtitleLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
 
-            qrImageView.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 12),
+            qrImageView.topAnchor.constraint(equalTo: qrTopAnchor, constant: 12),
             qrImageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             qrImageView.widthAnchor.constraint(equalToConstant: 180),
             qrImageView.heightAnchor.constraint(equalToConstant: 180),
@@ -76,6 +103,15 @@ class RemoteControlPopoverView: NSViewController {
     @objc private func copyURL() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(sessionURL, forType: .string)
+    }
+
+    private func isURLTrusted(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+            || host.hasSuffix(".claude.ai") || host == "claude.ai"
+            || host.hasSuffix(".anthropic.com") || host == "anthropic.com"
     }
 
     private func generateQRCode(from string: String) -> NSImage? {
