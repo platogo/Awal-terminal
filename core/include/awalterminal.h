@@ -11,6 +11,11 @@
 #include <stdlib.h>
 
 /**
+ * Opaque handle to an ACP client.
+ */
+typedef struct ATAcpClient ATAcpClient;
+
+/**
  * Opaque handle to a terminal surface.
  */
 typedef struct ATSurface ATSurface;
@@ -66,6 +71,17 @@ typedef struct CRegionSummary {
     uint32_t diff_count;
     uint32_t file_ref_count;
 } CRegionSummary;
+
+/**
+ * C-compatible ACP event.
+ * event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
+ *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited
+ */
+typedef struct ATAcpEvent {
+    uint8_t event_type;
+    char *text;
+    char *text2;
+} ATAcpEvent;
 
 /**
  * C-compatible region for FFI.
@@ -413,6 +429,39 @@ void at_surface_analyze(struct ATSurface *surface);
  * Get the current input line (text before cursor). Returns a C string that must be freed with `at_free_string`.
  */
 char *at_surface_get_input_line(const struct ATSurface *surface);
+
+/**
+ * Spawn kiro-cli acp. Returns opaque handle or null on failure.
+ */
+struct ATAcpClient *at_acp_spawn(const char *kiro_path,
+                                 const char *cwd);
+
+/**
+ * Poll next event. Returns null if no event available.
+ * Caller must free with at_acp_free_event.
+ */
+struct ATAcpEvent *at_acp_poll_event(struct ATAcpClient *client);
+
+/**
+ * Send a text prompt. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_send_prompt(struct ATAcpClient *client,
+                           const char *text);
+
+/**
+ * Cancel current operation. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_cancel(struct ATAcpClient *client);
+
+/**
+ * Free an event returned by at_acp_poll_event.
+ */
+void at_acp_free_event(struct ATAcpEvent *event);
+
+/**
+ * Destroy the ACP client (kills child process).
+ */
+void at_acp_destroy(struct ATAcpClient *client);
 
 /**
  * Create a new recording.

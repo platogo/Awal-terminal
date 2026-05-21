@@ -20,6 +20,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var sleepPreventionPopover: NSPopover?
     private var debounceSaveTimer: Timer?
     private var periodicSaveTimer: Timer?
+    private var acpClient: ACPClient?
 
     private(set) var tabs: [TabState] = []
     private(set) var tabGroups: [TabGroup] = []
@@ -2267,6 +2268,46 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.switchFolder(to: url.path)
+        }
+    }
+
+    // MARK: - ACP Client
+
+    /// Start an ACP session with kiro-cli at the given path.
+    func startACPSession(kiroPath: String, cwd: String) {
+        acpClient?.destroy()
+        let client = ACPClient()
+        client.onTextChunk = { [weak self] text in
+            self?.flashStatusBar(text)
+        }
+        client.onError = { [weak self] msg in
+            self?.flashStatusBar("ACP Error: \(msg)")
+        }
+        client.onTurnEnd = { [weak self] _ in
+            self?.flashStatusBar("ACP: Turn complete")
+        }
+        client.onSessionReady = { [weak self] in
+            self?.flashStatusBar("ACP: Session ready")
+        }
+        client.onProcessExited = { [weak self] _ in
+            self?.acpClient = nil
+            self?.flashStatusBar("ACP: Disconnected")
+        }
+        if client.spawn(kiroPath: kiroPath, cwd: cwd) {
+            acpClient = client
+        } else {
+            flashStatusBar("ACP: Failed to spawn kiro-cli")
+        }
+    }
+
+    /// Send a prompt to the active ACP session.
+    func sendACPPrompt(_ text: String) {
+        guard let acpClient else {
+            flashStatusBar("ACP: No active session")
+            return
+        }
+        if !acpClient.sendPrompt(text) {
+            flashStatusBar("ACP: Failed to send prompt")
         }
     }
 }
