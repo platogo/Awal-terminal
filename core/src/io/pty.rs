@@ -80,8 +80,19 @@ impl Pty {
                 std::mem::forget(stdout_fd);
                 std::mem::forget(stderr_fd);
 
-                if slave_raw > 2 {
-                    drop(slave);
+                // Close all inherited fds (GPU handles, sockets, pipes from other tabs).
+                // At this point dup2 has copied the slave fd onto 0/1/2, so the
+                // original slave fd and any other open descriptors >= 3 are safe
+                // to close unconditionally.
+                std::mem::forget(slave);
+                unsafe {
+                    // Close all inherited fds. Slave is already duped to 0/1/2 via dup2 above.
+                    let mut rlim: libc::rlimit = std::mem::zeroed();
+                    libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim);
+                    let max_fd = std::cmp::min(rlim.rlim_cur as i32, 4096);
+                    for fd in 3..max_fd {
+                        libc::close(fd);
+                    }
                 }
 
                 // Set environment variables
