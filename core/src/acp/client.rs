@@ -7,7 +7,8 @@ use std::thread::JoinHandle;
 
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
-    JsonRpcResponseOut, SessionNewParams, SessionPromptParams,
+    JsonRpcResponseOut, SessionCancelParams, SessionNewParams, SessionPromptParams,
+    SessionResumeParams,
 };
 use crate::acp::reader::{spawn_reader, AcpEvent};
 
@@ -30,17 +31,22 @@ pub struct AcpClient {
     state: AcpState,
     cwd: String,
     pending_error: Option<AcpEvent>,
+    resume_session_id: Option<String>,
 }
 
 impl AcpClient {
     /// Spawn kiro-cli acp and begin the initialize handshake.
-    pub fn spawn(kiro_path: &str, cwd: &str) -> Result<Self, String> {
-        let mut child = Command::new(kiro_path)
-            .arg("acp")
+    pub fn spawn(kiro_path: &str, cwd: &str, agent: Option<&str>) -> Result<Self, String> {
+        let mut cmd = Command::new(kiro_path);
+        cmd.arg("acp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .current_dir(cwd)
+            .current_dir(cwd);
+        if let Some(name) = agent {
+            cmd.args(["--agent", name]);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn kiro-cli: {e}"))?;
 
@@ -68,6 +74,7 @@ impl AcpClient {
             state: AcpState::Initializing,
             cwd: cwd.to_string(),
             pending_error: None,
+            resume_session_id: None,
         };
         client.send_initialize()?;
         Ok(client)
@@ -110,16 +117,52 @@ impl AcpClient {
         };
         self.send_request(
             "session/prompt",
-            Some(serde_json::to_value(params).unwrap()),
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
         )?;
         self.state = AcpState::Prompting;
         Ok(())
     }
 
-    /// Cancel the current operation by killing the child process.
+    /// Cancel the current operation by sending session/cancel.
     pub fn cancel(&mut self) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or("No active session".to_string())?;
+        let params = SessionCancelParams { session_id };
+        self.send_request(
+            "session/cancel",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Force-kill the child process (hard termination).
+    pub fn force_kill(&mut self) {
         self.kill();
-        Ok(())
+    }
+
+    /// Get the active session ID.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Send session/resume instead of session/new.
+    pub fn send_resume(&mut self, session_id: &str) -> Result<(), String> {
+        let params = SessionResumeParams {
+            session_id: session_id.to_string(),
+            cwd: self.cwd.clone(),
+        };
+        self.send_request(
+            "session/resume",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Spawn kiro-cli acp and resume an existing session.
+    pub fn spawn_and_resume(kiro_path: &str, cwd: &str, session_id: &str) -> Result<Self, String> {
+        let mut client = Self::spawn(kiro_path, cwd, None)?;
+        client.resume_session_id = Some(session_id.to_string());
+        Ok(client)
     }
 
     /// Send a permission response back to kiro-cli.
@@ -158,7 +201,10 @@ impl AcpClient {
                 version: "0.17.0".to_string(),
             },
         };
-        self.send_request("initialize", Some(serde_json::to_value(params).unwrap()))
+        self.send_request(
+            "initialize",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
     }
 
     fn send_session_new(&mut self) -> Result<(), String> {
@@ -166,7 +212,10 @@ impl AcpClient {
             cwd: self.cwd.clone(),
             mcp_servers: vec![],
         };
-        self.send_request("session/new", Some(serde_json::to_value(params).unwrap()))
+        self.send_request(
+            "session/new",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
     }
 
     fn send_request(
@@ -192,10 +241,19 @@ impl AcpClient {
     fn handle_state_transition(&mut self, event: &AcpEvent) {
         match event {
             AcpEvent::Initialized => {
-                // Auto-send session/new after initialize succeeds
-                if let Err(e) = self.send_session_new() {
-                    self.state = AcpState::Dead;
-                    self.pending_error = Some(AcpEvent::Error(format!("session/new failed: {e}")));
+                // If resuming, send session/resume; otherwise send session/new
+                if let Some(sid) = self.resume_session_id.take() {
+                    if let Err(e) = self.send_resume(&sid) {
+                        self.state = AcpState::Dead;
+                        self.pending_error =
+                            Some(AcpEvent::Error(format!("session/resume failed: {e}")));
+                    }
+                } else {
+                    if let Err(e) = self.send_session_new() {
+                        self.state = AcpState::Dead;
+                        self.pending_error =
+                            Some(AcpEvent::Error(format!("session/new failed: {e}")));
+                    }
                 }
             }
             AcpEvent::SessionCreated(id) => {
@@ -203,6 +261,9 @@ impl AcpClient {
                 self.state = AcpState::Ready;
             }
             AcpEvent::TurnEnd { .. } => {
+                self.state = AcpState::Ready;
+            }
+            AcpEvent::Cancelled => {
                 self.state = AcpState::Ready;
             }
             AcpEvent::ProcessExited(_) => {

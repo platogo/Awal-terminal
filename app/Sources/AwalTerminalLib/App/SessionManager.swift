@@ -68,6 +68,11 @@ class SessionManager {
             .sorted { $0.lastActiveAt > $1.lastActiveAt }
     }
 
+    /// Load ACP/Kiro sessions for a specific project path.
+    func loadACPSessions(projectPath: String) -> [SessionInfo] {
+        loadSessions().filter { $0.model == "Kiro" && $0.projectPath == projectPath }
+    }
+
     /// Delete a saved session.
     func deleteSession(id: String) {
         let file = sessionsDir.appendingPathComponent("\(id).json")

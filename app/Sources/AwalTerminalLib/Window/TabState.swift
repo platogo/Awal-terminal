@@ -20,6 +20,12 @@ class TabState {
     /// Set when the user manually closes the AI side panel; prevents auto-reopen.
     var userClosedAIPanel = false
 
+    /// Per-tab ACP client for Kiro sessions.
+    var acpClient: ACPClient?
+
+    /// Selected agent name for this tab's ACP session.
+    var agentName: String?
+
     /// Stored constraint for animating side panel width.
     var sidePanelWidthConstraint: NSLayoutConstraint?
 

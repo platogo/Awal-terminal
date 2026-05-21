@@ -14,7 +14,10 @@ class ACPClient {
     var onSessionReady: (() -> Void)?
     var onProcessExited: ((Int32?) -> Void)?
     var onPermissionRequest: ((PermissionRequest) -> Void)?
+    var onCancelled: (() -> Void)?
 
+    private(set) var sessionId: String?
+    private(set) var isPrompting: Bool = false
     private(set) var activeToolCalls: [String: ToolCallState] = [:]
 
     struct PermissionRequest {
@@ -25,10 +28,15 @@ class ACPClient {
         let kind: ToolCallKind
     }
 
-    func spawn(kiroPath: String, cwd: String) -> Bool {
+    func spawn(kiroPath: String, cwd: String, agent: String? = nil) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
             cwd.withCString { cwdPtr in
-                at_acp_spawn(kiroPtr, cwdPtr)
+                if let agent {
+                    return agent.withCString { agentPtr in
+                        at_acp_spawn(kiroPtr, cwdPtr, agentPtr)
+                    }
+                }
+                return at_acp_spawn(kiroPtr, cwdPtr, nil)
             }
         }
         guard let h else { return false }
@@ -37,16 +45,45 @@ class ACPClient {
         return true
     }
 
+    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String) -> Bool {
+        let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
+            cwd.withCString { cwdPtr in
+                sessionId.withCString { sidPtr in
+                    at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr)
+                }
+            }
+        }
+        guard let h else { return false }
+        handle = h
+        startPolling()
+        return true
+    }
+
+    func getSessionId() -> String? {
+        guard let handle else { return nil }
+        guard let ptr = at_acp_get_session_id(handle) else { return nil }
+        let str = String(cString: ptr)
+        at_free_string(ptr)
+        return str
+    }
+
     func sendPrompt(_ text: String) -> Bool {
         guard let handle else { return false }
-        return text.withCString { textPtr in
+        let ok = text.withCString { textPtr in
             at_acp_send_prompt(handle, textPtr) == 0
         }
+        if ok { isPrompting = true }
+        return ok
     }
 
     func cancel() -> Bool {
         guard let handle else { return false }
         return at_acp_cancel(handle) == 0
+    }
+
+    func forceKill() {
+        guard let handle else { return }
+        at_acp_force_kill(handle)
     }
 
     func respondPermission(requestId: UInt64, approved: Bool) {
@@ -93,6 +130,7 @@ class ACPClient {
             case 0: // Initialized — wait for SessionCreated
                 break
             case 1: // SessionCreated
+                if let text { sessionId = text }
                 onSessionReady?()
             case 2: // TextChunk
                 if let text { onTextChunk?(text) }
@@ -126,12 +164,14 @@ class ACPClient {
                     onToolCallUpdated?(id, status, content)
                 }
             case 5: // TurnEnd
+                isPrompting = false
                 activeToolCalls.removeAll()
                 onTurnEnd?(text2 ?? "")
             case 6: // Error
                 if let text { onError?(text) }
             case 7: // ProcessExited
                 let code = text.flatMap { Int32($0) }
+                isPrompting = false
                 onProcessExited?(code)
                 destroy()
             case 8: // PermissionRequest
@@ -148,6 +188,9 @@ class ACPClient {
                     )
                     handlePermissionRequest(request)
                 }
+            case 9: // Cancelled
+                isPrompting = false
+                onCancelled?()
             default:
                 break
             }

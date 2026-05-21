@@ -76,7 +76,7 @@ typedef struct CRegionSummary {
  * C-compatible ACP event.
  * event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
  *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
- *             8=PermissionRequest
+ *             8=PermissionRequest, 9=Cancelled
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -435,7 +435,8 @@ char *at_surface_get_input_line(const struct ATSurface *surface);
  * Spawn kiro-cli acp. Returns opaque handle or null on failure.
  */
 struct ATAcpClient *at_acp_spawn(const char *kiro_path,
-                                 const char *cwd);
+                                 const char *cwd,
+                                 const char *agent);
 
 /**
  * Poll next event. Returns null if no event available.
@@ -465,6 +466,23 @@ int32_t at_acp_respond_permission(struct ATAcpClient *client,
  * Free an event returned by at_acp_poll_event.
  */
 void at_acp_free_event(struct ATAcpEvent *event);
+
+/**
+ * Get the active session ID. Returns null if no session. Caller must free with `at_free_string`.
+ */
+char *at_acp_get_session_id(const struct ATAcpClient *client);
+
+/**
+ * Spawn kiro-cli acp and resume an existing session. Returns opaque handle or null on failure.
+ */
+struct ATAcpClient *at_acp_spawn_resume(const char *kiro_path,
+                                        const char *cwd,
+                                        const char *session_id);
+
+/**
+ * Force-kill the ACP child process (hard termination, no graceful cancel).
+ */
+void at_acp_force_kill(struct ATAcpClient *client);
 
 /**
  * Destroy the ACP client (kills child process).

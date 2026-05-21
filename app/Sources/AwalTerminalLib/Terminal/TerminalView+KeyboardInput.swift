@@ -278,6 +278,21 @@ extension TerminalView {
             }
         }
 
+        // Intercept Ctrl+C and Escape during ACP prompting to send session/cancel
+        if let wc = window?.windowController as? TerminalWindowController {
+            let tab = wc.tabs[wc.activeTabIndex]
+            if let client = tab.acpClient, client.isPrompting {
+                let isCtrlC = event.modifierFlags.contains(.control)
+                    && event.charactersIgnoringModifiers == "c"
+                let isEscape = event.keyCode == 53
+                if isCtrlC || isEscape {
+                    _ = client.cancel()
+                    wc.flashStatusBar("Cancelling…")
+                    return
+                }
+            }
+        }
+
         guard let s = surface else { return }
 
         let modFlags = event.modifierFlags

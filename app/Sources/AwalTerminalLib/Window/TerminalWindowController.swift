@@ -20,8 +20,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var sleepPreventionPopover: NSPopover?
     private var debounceSaveTimer: Timer?
     private var periodicSaveTimer: Timer?
-    private var acpClient: ACPClient?
     private var toolCallStack: ToolCallStackView?
+    /// Maps permission requestId to the ACPClient that originated it.
+    private var permissionRequestClients: [UInt64: ACPClient] = [:]
 
     /// Exposed for keyboard shortcut interception from TerminalView.
     var toolCallStackForPermissions: ToolCallStackView? { toolCallStack }
@@ -1296,6 +1297,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             let isFirst = tab.splitContainer.rootNode.allLeaves().first === tv
             var sessionId: String? = isFirst ? tab.tokenTracker.sessionId : nil
             if let sid = sessionId, sid.isEmpty { sessionId = nil }
+            // Also capture ACP session ID if available
+            if sessionId == nil, isFirst, let acpSid = tab.acpClient?.sessionId {
+                sessionId = acpSid
+            }
             // Deduplicate: if another tab already claimed this session ID, skip it
             if let sid = sessionId {
                 if usedSessionIds.contains(sid) {
@@ -1308,7 +1313,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 modelName: modelName,
                 workingDir: workingDir,
                 isDangerMode: false,
-                sessionId: sessionId
+                sessionId: sessionId,
+                agentName: isFirst ? tab.agentName : nil
             ))
         case .split(let dir, let first, let second):
             let savedDir: SavedSplitDirection = dir == .horizontal ? .horizontal : .vertical
@@ -1340,6 +1346,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             }
             if let gid = savedTab.groupID {
                 tab.groupID = UUID(uuidString: gid)
+            }
+
+            // Restore agent name from the first leaf pane
+            if case .leaf(let pane) = savedTab.splitTree, let agent = pane.agentName {
+                tab.agentName = agent
             }
 
             // Wire per-tab token tracker
@@ -1673,6 +1684,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         statusBar.onScreenshotToSession = { [weak self] in
             self?.screenshotToSession(nil)
+        }
+        tab.aiSidePanel.onResumeSession = { [weak self, weak tab] sessionId in
+            guard let self, let tab, let cwd = tab.statusBar.currentPath else { return }
+            let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
+            self.resumeACPSession(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId)
         }
     }
 
@@ -2278,24 +2294,81 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     // MARK: - ACP Client
 
     /// Start an ACP session with kiro-cli at the given path.
-    func startACPSession(kiroPath: String, cwd: String) {
-        acpClient?.destroy()
+    func startACPSession(kiroPath: String, cwd: String, agent: String? = nil) {
+        let tab = activeTab
+        tab.acpClient?.destroy()
         let client = ACPClient()
+        wireACPCallbacks(client, tab: tab)
+        if client.spawn(kiroPath: kiroPath, cwd: cwd, agent: agent) {
+            tab.acpClient = client
+        } else {
+            flashStatusBar("ACP: Failed to spawn kiro-cli")
+        }
+    }
+
+    /// Resume an existing ACP session.
+    func resumeACPSession(kiroPath: String, cwd: String, sessionId: String) {
+        let tab = activeTab
+        tab.acpClient?.destroy()
+        let client = ACPClient()
+        wireACPCallbacks(client, tab: tab)
+        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId) {
+            tab.acpClient = client
+        } else {
+            flashStatusBar("ACP: Failed to resume session")
+        }
+    }
+
+    /// Send a prompt to the active tab's ACP session.
+    func sendACPPrompt(_ text: String) {
+        guard let acpClient = activeTab.acpClient else {
+            flashStatusBar("ACP: No active session")
+            return
+        }
+        if !acpClient.sendPrompt(text) {
+            flashStatusBar("ACP: Failed to send prompt")
+        }
+    }
+
+    private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
         client.onTextChunk = { [weak self] text in
             self?.flashStatusBar(text)
         }
         client.onError = { [weak self] msg in
             self?.flashStatusBar("ACP Error: \(msg)")
         }
-        client.onTurnEnd = { [weak self] _ in
-            self?.toolCallStack?.clearAll()
-            self?.flashStatusBar("ACP: Turn complete")
+        client.onTurnEnd = { [weak self, weak tab] _ in
+            guard let self, let tab else { return }
+            self.toolCallStack?.clearAll()
+            self.flashStatusBar("ACP: Turn complete")
+            // Save session metadata
+            if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath {
+                let info = SessionManager.SessionInfo(
+                    id: sid, model: "Kiro", projectPath: cwd,
+                    startedAt: tab.sessionStartTime ?? Date(),
+                    lastActiveAt: Date(),
+                    inputTokens: tab.tokenTracker.currentInput,
+                    outputTokens: tab.tokenTracker.totalOutput,
+                    turns: tab.tokenTracker.conversationTurns + 1,
+                    jsonlPath: nil
+                )
+                SessionManager.shared.saveSession(info)
+            }
         }
-        client.onSessionReady = { [weak self] in
+        client.onSessionReady = { [weak self, weak tab] in
             self?.flashStatusBar("ACP: Session ready")
+            // Load session history for the side panel
+            if let tab, let cwd = tab.statusBar.currentPath {
+                let sessions = SessionManager.shared.loadACPSessions(projectPath: cwd)
+                tab.aiSidePanel.updateSessionHistory(sessions: sessions)
+            }
         }
-        client.onProcessExited = { [weak self] _ in
-            self?.acpClient = nil
+        client.onCancelled = { [weak self] in
+            self?.toolCallStack?.clearAll()
+            self?.flashStatusBar("Cancelled")
+        }
+        client.onProcessExited = { [weak self, weak tab] _ in
+            tab?.acpClient = nil
             self?.toolCallStack?.clearAll()
             self?.flashStatusBar("ACP: Disconnected")
         }
@@ -2306,25 +2379,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onToolCallUpdated = { [weak self] id, status, content in
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
         }
-        client.onPermissionRequest = { [weak self] request in
-            self?.ensureToolCallStack()
-            self?.toolCallStack?.addPermissionRequest(request)
-        }
-        if client.spawn(kiroPath: kiroPath, cwd: cwd) {
-            acpClient = client
-        } else {
-            flashStatusBar("ACP: Failed to spawn kiro-cli")
-        }
-    }
-
-    /// Send a prompt to the active ACP session.
-    func sendACPPrompt(_ text: String) {
-        guard let acpClient else {
-            flashStatusBar("ACP: No active session")
-            return
-        }
-        if !acpClient.sendPrompt(text) {
-            flashStatusBar("ACP: Failed to send prompt")
+        client.onPermissionRequest = { [weak self, weak client] request in
+            guard let self, let client else { return }
+            self.permissionRequestClients[request.requestId] = client
+            self.ensureToolCallStack()
+            self.toolCallStack?.addPermissionRequest(request)
         }
     }
 
@@ -2349,12 +2408,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
 extension TerminalWindowController: PermissionApprovalDelegate {
     func permissionApproved(requestId: UInt64) {
-        acpClient?.respondPermission(requestId: requestId, approved: true)
+        permissionRequestClients.removeValue(forKey: requestId)?.respondPermission(requestId: requestId, approved: true)
         toolCallStack?.removePermissionRequest(requestId: requestId)
     }
 
     func permissionRejected(requestId: UInt64) {
-        acpClient?.respondPermission(requestId: requestId, approved: false)
+        permissionRequestClients.removeValue(forKey: requestId)?.respondPermission(requestId: requestId, approved: false)
         toolCallStack?.removePermissionRequest(requestId: requestId)
     }
 }

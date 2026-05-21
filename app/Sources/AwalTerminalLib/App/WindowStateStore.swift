@@ -7,6 +7,15 @@ struct SavedPaneState: Codable {
     let workingDir: String?
     let isDangerMode: Bool
     let sessionId: String?      // Claude/Gemini session ID for resume
+    let agentName: String?      // Kiro agent name for ACP sessions
+
+    init(modelName: String, workingDir: String?, isDangerMode: Bool, sessionId: String?, agentName: String? = nil) {
+        self.modelName = modelName
+        self.workingDir = workingDir
+        self.isDangerMode = isDangerMode
+        self.sessionId = sessionId
+        self.agentName = agentName
+    }
 }
 
 enum SavedSplitDirection: String, Codable {

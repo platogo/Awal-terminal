@@ -28,6 +28,7 @@ pub enum AcpEvent {
     TurnEnd {
         stop_reason: String,
     },
+    Cancelled,
     PermissionRequest {
         request_id: u64,
         tool_call_id: String,
@@ -106,10 +107,11 @@ fn parse_message(
                 let _: InitializeResult = serde_json::from_value(result).ok()?;
                 Some(AcpEvent::Initialized)
             }
-            "session/new" => {
+            "session/new" | "session/resume" => {
                 let r: SessionNewResult = serde_json::from_value(result).ok()?;
                 Some(AcpEvent::SessionCreated(r.session_id))
             }
+            "session/cancel" => Some(AcpEvent::Cancelled),
             "session/prompt" => {
                 let r: SessionPromptResult = serde_json::from_value(result).ok()?;
                 Some(AcpEvent::TurnEnd {
@@ -247,5 +249,38 @@ mod tests {
             }
             _ => panic!("expected PermissionRequest"),
         }
+    }
+
+    #[test]
+    fn parse_session_resume_response() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(3, "session/resume".to_string());
+
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":3,"result":{"sessionId":"resumed-456"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SessionCreated(id) => assert_eq!(id, "resumed-456"),
+            _ => panic!("expected SessionCreated from resume"),
+        }
+    }
+
+    #[test]
+    fn parse_session_cancel_response() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(4, "session/cancel".to_string());
+
+        let msg: RawMessage =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":4,"result":{}}"#).unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        assert!(matches!(event, AcpEvent::Cancelled));
     }
 }

@@ -35,7 +35,7 @@ extension NSAlert {
     }
 }
 
-public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
 
     private static let recordingWarningDismissedKey = "recordingSecretWarningDismissed"
     private var dangerModeTimer: Timer?
@@ -807,6 +807,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
 
         toolsMenu.addItem(NSMenuItem.separator())
 
+        let agentMenuItem = NSMenuItem(title: "Kiro Agent", action: nil, keyEquivalent: "")
+        let agentSubmenu = NSMenu(title: "Kiro Agent")
+        agentSubmenu.delegate = self
+        agentMenuItem.submenu = agentSubmenu
+        toolsMenu.addItem(agentMenuItem)
+
+        toolsMenu.addItem(NSMenuItem.separator())
+
         let preventSleepItem = NSMenuItem(title: "Prevent Sleep", action: #selector(togglePreventSleep(_:)), keyEquivalent: "")
         toolsMenu.addItem(preventSleepItem)
 
@@ -935,6 +943,57 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation 
                   let (key, mods) = AppConfig.parseKeybinding(combo) else { continue }
             item.keyEquivalent = key
             item.keyEquivalentModifierMask = mods
+        }
+    }
+
+    // MARK: - NSMenuDelegate (Agent submenu)
+
+    public func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Kiro Agent" else { return }
+        menu.removeAllItems()
+
+        AgentStore.shared.refresh()
+        let agents = AgentStore.shared.agents()
+
+        if agents.isEmpty {
+            let emptyItem = NSMenuItem(title: "No agents found", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
+            return
+        }
+
+        // Get current tab's agent name for checkmark
+        let currentAgent: String? = {
+            guard let wc = NSApp.keyWindow?.windowController as? TerminalWindowController else { return nil }
+            return wc.tabs[wc.activeTabIndex].agentName
+        }()
+
+        for agent in agents {
+            let item = NSMenuItem(title: agent.name, action: #selector(selectAgent(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = agent.name
+            if agent.name == currentAgent {
+                item.state = .on
+            }
+            if let desc = agent.description {
+                item.toolTip = desc
+            }
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func selectAgent(_ sender: NSMenuItem) {
+        guard let agentName = sender.representedObject as? String,
+              let wc = NSApp.keyWindow?.windowController as? TerminalWindowController else { return }
+        let tab = wc.tabs[wc.activeTabIndex]
+        tab.agentName = agentName
+
+        // If ACP session is active, restart with new agent
+        if let client = tab.acpClient {
+            client.destroy()
+            tab.acpClient = nil
+            // Re-launch with agent flag — the agent is stored and will be used on next session start
+            wc.flashStatusBar("Agent: \(agentName)")
         }
     }
 }

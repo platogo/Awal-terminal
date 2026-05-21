@@ -68,6 +68,12 @@ class AISidePanelView: NSView {
     private var diffPopoverFilePath: String?
     private weak var contextPopover: NSPopover?
 
+    // Session history
+    private let sessionHistorySeparator = NSView()
+    private let sessionHistoryLabel = NSTextField(labelWithString: "Sessions")
+    private let sessionHistoryStack = NSStackView()
+    var onResumeSession: ((String) -> Void)?
+
     // AI component details for context popover
     private var activeAIComponentDetails: [(name: String, source: String, stack: String, type: ComponentType, key: String)] = []
 
@@ -290,6 +296,24 @@ class AISidePanelView: NSView {
         gitScrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(gitScrollView)
 
+        // Session history section
+        sessionHistorySeparator.wantsLayer = true
+        sessionHistorySeparator.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        sessionHistorySeparator.translatesAutoresizingMaskIntoConstraints = false
+        sessionHistorySeparator.isHidden = true
+        addSubview(sessionHistorySeparator)
+
+        sessionHistoryLabel.font = sectionFont
+        sessionHistoryLabel.textColor = sectionColor
+        sessionHistoryLabel.isHidden = true
+        configureLabel(sessionHistoryLabel)
+
+        sessionHistoryStack.orientation = .vertical
+        sessionHistoryStack.alignment = .leading
+        sessionHistoryStack.spacing = 2
+        sessionHistoryStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sessionHistoryStack)
+
         // Elapsed time
         elapsedLabel.font = monoFontSmall
         elapsedLabel.textColor = dimColor
@@ -406,7 +430,19 @@ class AISidePanelView: NSView {
             gitScrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             gitScrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             gitScrollView.topAnchor.constraint(equalTo: gitSummaryStack.bottomAnchor, constant: 6),
-            gitScrollView.bottomAnchor.constraint(equalTo: elapsedLabel.topAnchor, constant: -8),
+            gitScrollView.bottomAnchor.constraint(equalTo: sessionHistorySeparator.topAnchor, constant: -8),
+
+            // Session history
+            sessionHistorySeparator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
+            sessionHistorySeparator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
+            sessionHistorySeparator.heightAnchor.constraint(equalToConstant: 1),
+
+            sessionHistoryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
+            sessionHistoryLabel.topAnchor.constraint(equalTo: sessionHistorySeparator.bottomAnchor, constant: sectionGap),
+
+            sessionHistoryStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
+            sessionHistoryStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
+            sessionHistoryStack.topAnchor.constraint(equalTo: sessionHistoryLabel.bottomAnchor, constant: 4),
 
             // Elapsed at bottom
             elapsedLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
@@ -503,6 +539,48 @@ class AISidePanelView: NSView {
         updateTokenDisplay(input: 0, output: 0)
         updateActivityDisplay(tools: 0, codeBlocks: 0, diffs: 0)
         updateFileRefs([])
+        sessionHistoryStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+    }
+
+    /// Update the session history section with ACP sessions for the current project.
+    func updateSessionHistory(sessions: [SessionManager.SessionInfo]) {
+        sessionHistoryStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+
+        let visible = Array(sessions.prefix(5))
+        if visible.isEmpty {
+            sessionHistorySeparator.isHidden = true
+            sessionHistoryLabel.isHidden = true
+            return
+        }
+
+        sessionHistorySeparator.isHidden = false
+        sessionHistoryLabel.isHidden = false
+
+        for session in visible {
+            let button = NSButton(title: "", target: self, action: #selector(sessionHistoryClicked(_:)))
+            button.bezelStyle = .inline
+            button.isBordered = false
+            button.font = NSFont.monospacedSystemFont(ofSize: 10.0, weight: .regular)
+            let timeAgo = Self.relativeTime(session.lastActiveAt)
+            let truncId = String(session.id.prefix(8))
+            button.title = "  \(truncId)… · \(session.turns)t · \(timeAgo)"
+            button.contentTintColor = NSColor(white: 0.6, alpha: 1.0)
+            button.alignment = .left
+            button.identifier = NSUserInterfaceItemIdentifier(session.id)
+            sessionHistoryStack.addArrangedSubview(button)
+        }
+    }
+
+    @objc private func sessionHistoryClicked(_ sender: NSButton) {
+        guard let sessionId = sender.identifier?.rawValue else { return }
+        onResumeSession?(sessionId)
+    }
+
+    private static func relativeTime(_ date: Date) -> String {
+        let seconds = -date.timeIntervalSinceNow
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 
     func updateTokenDisplay(input: Int, output: Int) {
