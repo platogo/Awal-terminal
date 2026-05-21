@@ -107,6 +107,10 @@ struct AppConfig {
     // Remote Control (auto-launch with --remote-control flag)
     var remoteControlEnabled: Bool = false
 
+    // Kiro
+    var kiroBinaryPath: String?
+    var kiroDefaultAgent: String?
+
     // Sleep prevention (keep display awake during terminal activity)
     var preventSleep: Bool = false
 
@@ -238,6 +242,10 @@ struct AppConfig {
 
         // Remote control
         if let v = parsed["ai_components.remote_control"] { config.remoteControlEnabled = v == "true" }
+
+        // Kiro
+        if let v = parsed["kiro.binary_path"] { config.kiroBinaryPath = v }
+        if let v = parsed["kiro.default_agent"] { config.kiroDefaultAgent = v }
 
         // Sleep prevention
         if let v = parsed["system.prevent_sleep"] { config.preventSleep = v == "true" }

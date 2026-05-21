@@ -640,6 +640,18 @@ extension TerminalView {
             modelCmd = "command -v \(bin) >/dev/null 2>&1 || { echo \"Installing \(model.name)...\"; \(install); } && \(model.command)"
         }
 
+        // Kiro: apply config overrides (custom binary path, default agent)
+        if model.name == "Kiro" {
+            let config = AppConfig.shared
+            if let binPath = config.kiroBinaryPath {
+                let escaped = binPath.shellEscaped
+                modelCmd = modelCmd.replacingOccurrences(of: "kiro-cli", with: escaped)
+            }
+            if commandOverride == nil, let agent = config.kiroDefaultAgent {
+                modelCmd += " --agent \(agent.shellEscaped)"
+            }
+        }
+
         // Danger mode: append skip-permissions flag if supported
         isDangerMode = dangerMode
         if dangerMode, commandOverride == nil, let flag = model.dangerFlag, !flag.isEmpty {
@@ -871,5 +883,14 @@ extension TerminalView {
 
         buildMenuEntries()
         renderMenu()
+    }
+}
+
+// MARK: - Shell Escaping
+
+private extension String {
+    /// Wraps the string in single quotes, escaping any internal single quotes with `'\''`.
+    var shellEscaped: String {
+        "'" + self.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

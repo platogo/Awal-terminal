@@ -184,6 +184,10 @@ slugs = "ZpDEwZj1Yq"
 [ai_components.registry.my-local]
 type = "local"
 path = "/path/to/local/registry"
+
+[kiro]
+# binary_path = "/custom/path/to/kiro-cli"
+# default_agent = "my-agent"
 ```
 
 ## Architecture

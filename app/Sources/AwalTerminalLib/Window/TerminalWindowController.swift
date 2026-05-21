@@ -1496,6 +1496,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             let isAI = !model.isEmpty && model != "Shell"
             if let surface = terminal.surfacePointer {
                 at_surface_set_ai_analysis(surface, isAI)
+                if isAI {
+                    model.withCString { ptr in
+                        at_surface_set_ai_provider(surface, ptr)
+                    }
+                }
             }
             tab.statusBar.setVoiceVisible(true)
             // Auto-open AI side panel for LLM sessions (unless user manually closed it)

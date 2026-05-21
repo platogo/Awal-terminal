@@ -50,6 +50,16 @@ const DEFAULT_TOOL_NAMES: &[&str] = &[
     "CronCreate",
 ];
 
+/// Kiro CLI tool output prefixes.
+const KIRO_TOOL_PREFIXES: &[&str] = &[
+    "⟡ Reading",
+    "⟡ Running",
+    "⟡ Writing",
+    "⟡ Searching",
+    "⟡ Listing",
+    "⟡ Fetching",
+];
+
 /// AI Output Analyzer — detects Claude Code patterns in terminal cell rows.
 pub struct AiAnalyzer {
     regions: Vec<OutputRegion>,
@@ -71,6 +81,8 @@ pub struct AiAnalyzer {
     tool_names: Vec<String>,
     /// Pre-compiled tool header patterns: "ToolName(" and "ToolName ("
     tool_patterns: Vec<(String, String)>,
+    /// Whether Kiro CLI mode is active (matches Kiro tool prefixes).
+    kiro_mode: bool,
 }
 
 impl Default for AiAnalyzer {
@@ -94,6 +106,7 @@ impl AiAnalyzer {
             remote_control_url: None,
             tool_names,
             tool_patterns,
+            kiro_mode: false,
         }
     }
 
@@ -101,6 +114,11 @@ impl AiAnalyzer {
     pub fn set_tool_names(&mut self, names: Vec<String>) {
         self.tool_patterns = Self::build_tool_patterns(&names);
         self.tool_names = names;
+    }
+
+    /// Enable or disable Kiro CLI tool pattern matching.
+    pub fn set_kiro_mode(&mut self, enabled: bool) {
+        self.kiro_mode = enabled;
     }
 
     fn build_tool_patterns(names: &[String]) -> Vec<(String, String)> {
@@ -416,6 +434,15 @@ impl AiAnalyzer {
     }
 
     fn is_tool_header(&self, text: &str) -> bool {
+        // Kiro CLI tool headers: "⟡ Reading ...", "⟡ Running ...", etc.
+        if self.kiro_mode {
+            for prefix in KIRO_TOOL_PREFIXES {
+                if text.starts_with(prefix) {
+                    return true;
+                }
+            }
+        }
+
         // Claude Code tool headers contain tool names (use pre-compiled patterns)
         for (pat_paren, pat_space) in &self.tool_patterns {
             if text.contains(pat_paren.as_str()) || text.contains(pat_space.as_str()) {
@@ -440,6 +467,21 @@ impl AiAnalyzer {
     }
 
     fn extract_tool_label(&self, text: &str) -> String {
+        // Kiro format: "⟡ Reading src/main.rs..." → "Reading src/main.rs"
+        if self.kiro_mode {
+            for prefix in KIRO_TOOL_PREFIXES {
+                if let Some(rest) = text.strip_prefix(prefix) {
+                    let after = rest.trim_start().trim_end_matches("...");
+                    let verb = &prefix["⟡ ".len()..];
+                    return if after.is_empty() {
+                        verb.to_string()
+                    } else {
+                        format!("{verb} {after}")
+                    };
+                }
+            }
+        }
+
         for name in &self.tool_names {
             if let Some(pos) = text.find(name.as_str()) {
                 // Try to extract tool name + first argument
@@ -644,6 +686,42 @@ pub struct RegionSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_kiro_tool_header_detection() {
+        let mut analyzer = AiAnalyzer::new();
+        analyzer.set_kiro_mode(true);
+
+        assert!(analyzer.is_tool_header("⟡ Reading src/main.rs..."));
+        assert!(analyzer.is_tool_header("⟡ Running cargo build..."));
+        assert!(analyzer.is_tool_header("⟡ Writing output.txt..."));
+        assert!(analyzer.is_tool_header("⟡ Searching for pattern..."));
+        assert!(analyzer.is_tool_header("⟡ Listing /tmp..."));
+        assert!(analyzer.is_tool_header("⟡ Fetching https://example.com..."));
+
+        // Should not match without kiro_mode
+        analyzer.set_kiro_mode(false);
+        assert!(!analyzer.is_tool_header("⟡ Reading src/main.rs..."));
+    }
+
+    #[test]
+    fn test_kiro_tool_label_extraction() {
+        let mut analyzer = AiAnalyzer::new();
+        analyzer.set_kiro_mode(true);
+
+        assert_eq!(
+            analyzer.extract_tool_label("⟡ Reading src/main.rs..."),
+            "Reading src/main.rs"
+        );
+        assert_eq!(
+            analyzer.extract_tool_label("⟡ Running cargo build..."),
+            "Running cargo build"
+        );
+        assert_eq!(
+            analyzer.extract_tool_label("⟡ Writing output.txt..."),
+            "Writing output.txt"
+        );
+    }
 
     #[test]
     fn test_is_separator_line() {

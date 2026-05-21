@@ -344,6 +344,12 @@ void at_surface_set_ai_analysis(struct ATSurface *surface,
                                 bool enabled);
 
 /**
+ * Set the AI provider for this surface (enables provider-specific tool detection).
+ */
+void at_surface_set_ai_provider(struct ATSurface *surface,
+                                const char *provider);
+
+/**
  * Check if AI analysis is enabled.
  */
 bool at_surface_get_ai_analysis(const struct ATSurface *surface);

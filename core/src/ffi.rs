@@ -769,6 +769,20 @@ pub extern "C" fn at_surface_set_ai_analysis(surface: *mut ATSurface, enabled: b
     surface.analyzer.set_enabled(enabled);
 }
 
+/// Set the AI provider for this surface (enables provider-specific tool detection).
+#[no_mangle]
+pub extern "C" fn at_surface_set_ai_provider(surface: *mut ATSurface, provider: *const c_char) {
+    let surface = mut_ref_or!(surface);
+    let provider_str = if provider.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(provider) }
+            .to_str()
+            .unwrap_or("")
+    };
+    surface.analyzer.set_kiro_mode(provider_str == "Kiro");
+}
+
 /// Check if AI analysis is enabled.
 #[no_mangle]
 pub extern "C" fn at_surface_get_ai_analysis(surface: *const ATSurface) -> bool {
