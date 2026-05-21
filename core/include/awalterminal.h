@@ -76,7 +76,8 @@ typedef struct CRegionSummary {
  * C-compatible ACP event.
  * event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
  *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
- *             8=PermissionRequest, 9=Cancelled
+ *             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
+ *             11=FsReadRequest, 12=FsWriteRequest
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -461,6 +462,30 @@ int32_t at_acp_cancel(struct ATAcpClient *client);
 int32_t at_acp_respond_permission(struct ATAcpClient *client,
                                   uint64_t request_id,
                                   bool approved);
+
+/**
+ * Respond to a fs/read_text_file request. Pass null content_ptr for error.
+ */
+int32_t at_acp_respond_fs_read(struct ATAcpClient *client,
+                               uint64_t request_id,
+                               const char *content_ptr);
+
+/**
+ * Respond to a fs/write_text_file request.
+ */
+int32_t at_acp_respond_fs_write(struct ATAcpClient *client,
+                                uint64_t request_id,
+                                bool success);
+
+/**
+ * Get the current ACP state. Returns: 0=Initializing, 1=Ready, 2=Prompting, 3=Dead, 4=Recovering.
+ */
+uint8_t at_acp_get_state(const struct ATAcpClient *client);
+
+/**
+ * Trigger a manual respawn. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_respawn(struct ATAcpClient *client);
 
 /**
  * Free an event returned by at_acp_poll_event.

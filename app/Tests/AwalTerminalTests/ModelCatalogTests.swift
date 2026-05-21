@@ -36,7 +36,7 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(model?.provider, "Amazon")
         XCTAssertEqual(model?.command, "kiro-cli chat")
         XCTAssertEqual(model?.contextWindow, 200_000)
-        XCTAssertEqual(model?.injectionStrategy, .instructionsFlag)
+        XCTAssertEqual(model?.injectionStrategy, .none)
         XCTAssertEqual(model?.dangerFlag, "--trust-all-tools")
         XCTAssertNotNil(model?.resumeCommand)
     }

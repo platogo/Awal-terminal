@@ -21,8 +21,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var debounceSaveTimer: Timer?
     private var periodicSaveTimer: Timer?
     private var toolCallStack: ToolCallStackView?
-    /// Maps permission requestId to the ACPClient that originated it.
-    private var permissionRequestClients: [UInt64: ACPClient] = [:]
+    private var pendingFsWrites: [UInt64: (path: String, content: String)] = [:]
 
     /// Exposed for keyboard shortcut interception from TerminalView.
     var toolCallStackForPermissions: ToolCallStackView? { toolCallStack }
@@ -2294,15 +2293,15 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     // MARK: - ACP Client
 
     /// Start an ACP session with kiro-cli at the given path.
-    func startACPSession(kiroPath: String, cwd: String, agent: String? = nil) {
+    func startACPSession(kiroPath: String, cwd: String) {
         let tab = activeTab
         tab.acpClient?.destroy()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
-        if client.spawn(kiroPath: kiroPath, cwd: cwd, agent: agent) {
+        if client.spawn(kiroPath: kiroPath, cwd: cwd) {
             tab.acpClient = client
         } else {
-            flashStatusBar("ACP: Failed to spawn kiro-cli")
+            fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
         }
     }
 
@@ -2330,9 +2329,26 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
     }
 
+    /// Fall back to PTY mode for the given tab.
+    private func fallbackToPTY(tab: TabState, message: String) {
+        tab.acpClient?.destroy()
+        tab.acpClient = nil
+        flashStatusBar(message)
+        // Launch Kiro in PTY mode via the terminal view
+        let terminal = tab.splitContainer.focusedTerminal
+        guard let model = ModelCatalog.find("Kiro") else { return }
+        let dir = tab.statusBar.currentPath
+        terminal.launchSessionDirect(model: model, workingDir: dir)
+    }
+
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
-        client.onTextChunk = { [weak self] text in
+        client.onTextChunk = { [weak self, weak tab] text in
+            guard let tab else { return }
             self?.flashStatusBar(text)
+            tab.tokenTracker.updateFromACP(
+                inputChars: tab.acpClient?.totalCharsSent ?? 0,
+                outputChars: tab.acpClient?.totalCharsReceived ?? 0
+            )
         }
         client.onError = { [weak self] msg in
             self?.flashStatusBar("ACP Error: \(msg)")
@@ -2341,6 +2357,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let tab else { return }
             self.toolCallStack?.clearAll()
             self.flashStatusBar("ACP: Turn complete")
+            tab.tokenTracker.incrementTurns()
             // Save session metadata
             if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath {
                 let info = SessionManager.SessionInfo(
@@ -2367,10 +2384,21 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.toolCallStack?.clearAll()
             self?.flashStatusBar("Cancelled")
         }
+        client.onRecovering = { [weak self] in
+            self?.flashStatusBar("ACP: Reconnecting...")
+        }
+        client.onRecoveryFailed = { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.fallbackToPTY(tab: tab, message: "ACP: Connection lost — switching to PTY mode")
+        }
         client.onProcessExited = { [weak self, weak tab] _ in
-            tab?.acpClient = nil
-            self?.toolCallStack?.clearAll()
-            self?.flashStatusBar("ACP: Disconnected")
+            guard let self, let tab else { return }
+            self.toolCallStack?.clearAll()
+            self.fallbackToPTY(tab: tab, message: "ACP: Disconnected — switching to PTY mode")
+        }
+        client.onAuthRequired = { [weak self, weak tab] msg in
+            guard let self, let tab else { return }
+            self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
         client.onToolCallStarted = { [weak self] state in
             self?.ensureToolCallStack()
@@ -2379,9 +2407,19 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onToolCallUpdated = { [weak self] id, status, content in
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
         }
-        client.onPermissionRequest = { [weak self, weak client] request in
-            guard let self, let client else { return }
-            self.permissionRequestClients[request.requestId] = client
+        client.onPermissionRequest = { [weak self] request in
+            self?.ensureToolCallStack()
+            self?.toolCallStack?.addPermissionRequest(request)
+        }
+        client.onFsWriteRequest = { [weak self] requestId, path, content in
+            guard let self else { return }
+            // Store write data for when permission is approved
+            self.pendingFsWrites[requestId] = (path: path, content: content)
+            // Route through permission system
+            let request = ACPClient.PermissionRequest(
+                requestId: requestId, toolCallId: "", toolName: "fs/write_text_file",
+                description: "Write to \(path)", kind: .write
+            )
             self.ensureToolCallStack()
             self.toolCallStack?.addPermissionRequest(request)
         }
@@ -2408,12 +2446,33 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
 extension TerminalWindowController: PermissionApprovalDelegate {
     func permissionApproved(requestId: UInt64) {
-        permissionRequestClients.removeValue(forKey: requestId)?.respondPermission(requestId: requestId, approved: true)
+        if let writeData = pendingFsWrites.removeValue(forKey: requestId) {
+            // fs/write request — write the file off the main thread
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let success: Bool
+                do {
+                    try writeData.content.write(toFile: writeData.path, atomically: true, encoding: .utf8)
+                    success = true
+                } catch {
+                    success = false
+                }
+                DispatchQueue.main.async {
+                    self?.activeTab.acpClient?.respondFsWrite(requestId: requestId, success: success)
+                }
+            }
+        } else {
+            // Tool permission request
+            activeTab.acpClient?.respondPermission(requestId: requestId, approved: true)
+        }
         toolCallStack?.removePermissionRequest(requestId: requestId)
     }
 
     func permissionRejected(requestId: UInt64) {
-        permissionRequestClients.removeValue(forKey: requestId)?.respondPermission(requestId: requestId, approved: false)
+        if pendingFsWrites.removeValue(forKey: requestId) != nil {
+            activeTab.acpClient?.respondFsWrite(requestId: requestId, success: false)
+        } else {
+            activeTab.acpClient?.respondPermission(requestId: requestId, approved: false)
+        }
         toolCallStack?.removePermissionRequest(requestId: requestId)
     }
 }

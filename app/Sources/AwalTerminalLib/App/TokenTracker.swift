@@ -61,6 +61,22 @@ class TokenTracker {
         return FileManager.default.fileExists(atPath: claudeDir.path) ? claudeDir : nil
     }
 
+    /// Update token estimates from ACP char counts (chars/4 ≈ tokens).
+    func updateFromACP(inputChars: Int, outputChars: Int) {
+        lock.lock()
+        currentInput = (inputChars + outputChars) / 4
+        totalOutput = outputChars / 4
+        cumulativeInputFull = inputChars / 4
+        modelUsed = "Kiro"
+        lock.unlock()
+    }
+
+    func incrementTurns() {
+        lock.lock()
+        conversationTurns += 1
+        lock.unlock()
+    }
+
     func update(projectPath: String?) {
         guard let projectPath = projectPath, !projectPath.isEmpty else { return }
 
