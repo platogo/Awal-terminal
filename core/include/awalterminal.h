@@ -77,7 +77,8 @@ typedef struct CRegionSummary {
  * event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
  *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
  *             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
- *             11=FsReadRequest, 12=FsWriteRequest
+ *             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
+ *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -455,6 +456,12 @@ int32_t at_acp_send_prompt(struct ATAcpClient *client,
  * Cancel current operation. Returns 0 on success, -1 on error.
  */
 int32_t at_acp_cancel(struct ATAcpClient *client);
+
+/**
+ * Cancel a specific subagent. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_cancel_subagent(struct ATAcpClient *client,
+                               const char *subagent_id);
 
 /**
  * Respond to a permission request. Returns 0 on success, -1 on error.

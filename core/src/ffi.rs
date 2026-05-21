@@ -944,7 +944,8 @@ pub struct ATAcpClient(AcpClient);
 /// event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
 ///             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
 ///             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
-///             11=FsReadRequest, 12=FsWriteRequest
+///             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
+///             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError
 #[repr(C)]
 pub struct ATAcpEvent {
     pub event_type: u8,
@@ -1052,6 +1053,43 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     string_to_c(content),
                     string_to_c(&format!("{request_id}\t{path}")),
                 ),
+                AcpEvent::SubagentSpawned {
+                    subagent_id,
+                    name,
+                    role,
+                    parent_session_id,
+                    depends_on,
+                } => (
+                    13,
+                    string_to_c(name),
+                    string_to_c(&format!(
+                        "{subagent_id}\t{}\t{}\t{}",
+                        role.as_deref().unwrap_or(""),
+                        parent_session_id.as_deref().unwrap_or(""),
+                        depends_on.join(",")
+                    )),
+                ),
+                AcpEvent::SubagentProgress {
+                    subagent_id,
+                    phase,
+                    tokens_used,
+                } => (
+                    14,
+                    string_to_c(phase),
+                    string_to_c(&format!("{subagent_id}\t{}", tokens_used.unwrap_or(0))),
+                ),
+                AcpEvent::SubagentComplete {
+                    subagent_id,
+                    tokens_used,
+                } => (
+                    15,
+                    std::ptr::null_mut(),
+                    string_to_c(&format!("{subagent_id}\t{}", tokens_used.unwrap_or(0))),
+                ),
+                AcpEvent::SubagentError {
+                    subagent_id,
+                    message,
+                } => (16, string_to_c(message), string_to_c(subagent_id)),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1082,6 +1120,23 @@ pub extern "C" fn at_acp_send_prompt(client: *mut ATAcpClient, text: *const c_ch
 pub extern "C" fn at_acp_cancel(client: *mut ATAcpClient) -> i32 {
     let client = mut_ref_or!(client, -1);
     match client.0.cancel() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Cancel a specific subagent. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_cancel_subagent(
+    client: *mut ATAcpClient,
+    subagent_id: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if subagent_id.is_null() {
+        return -1;
+    }
+    let id_str = unsafe { std::ffi::CStr::from_ptr(subagent_id).to_str().unwrap_or("") };
+    match client.0.cancel_subagent(id_str) {
         Ok(()) => 0,
         Err(_) => -1,
     }

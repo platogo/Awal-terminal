@@ -6,6 +6,7 @@ class TabState {
     let statusBar: StatusBarView
     let aiSidePanel: AISidePanelView
     let tokenTracker = TokenTracker()
+    let subagentTracker = SubagentTracker()
     var sessionStartTime: Date?
     var customTitle: String?
     var tabColor: NSColor?
