@@ -30,6 +30,17 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(model?.provider, "Terminal")
     }
 
+    func testFindKiro() {
+        let model = ModelCatalog.find("Kiro")
+        XCTAssertNotNil(model)
+        XCTAssertEqual(model?.provider, "Amazon")
+        XCTAssertEqual(model?.command, "kiro-cli chat")
+        XCTAssertEqual(model?.contextWindow, 200_000)
+        XCTAssertEqual(model?.injectionStrategy, .instructionsFlag)
+        XCTAssertEqual(model?.dangerFlag, "--trust-all-tools")
+        XCTAssertNotNil(model?.resumeCommand)
+    }
+
     func testFindNonExistent() {
         XCTAssertNil(ModelCatalog.find("NonExistent"))
     }

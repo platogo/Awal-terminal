@@ -121,6 +121,17 @@ enum AIComponentInjector {
             result = injectClaude(stacks: stacks, registries: registries, disabledComponents: disabledComponents, blockedComponents: blockedComponents, hooks: hooks)
         case "Gemini", "Codex":
             result = injectAgentsSkills(stacks: stacks, registries: registries, disabledComponents: disabledComponents, blockedComponents: blockedComponents, hooks: hooks)
+        case "Kiro":
+            result = injectGeneric(
+                stacks: stacks,
+                registries: registries,
+                prefix: "kiro",
+                projectPath: projectPath,
+                flagName: "--instructions",
+                disabledComponents: disabledComponents,
+                blockedComponents: blockedComponents,
+                hooks: hooks
+            )
         default:
             result = injectGeneric(
                 stacks: stacks,
