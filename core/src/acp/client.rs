@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
     JsonRpcResponseOut, SessionCancelParams, SessionNewParams, SessionPromptParams,
-    SessionResumeParams,
+    SessionResumeParams, SessionRewindParams,
 };
 use crate::acp::reader::{spawn_reader, AcpEvent};
 
@@ -37,13 +37,21 @@ pub struct AcpClient {
     crash_count: u8,
     max_retries: u8,
     pgid: i32,
+    engine: Option<String>,
+    trust_tools: Option<String>,
 }
 
 impl AcpClient {
     /// Spawn kiro-cli acp and begin the initialize handshake.
-    pub fn spawn(kiro_path: &str, cwd: &str, agent: Option<&str>) -> Result<Self, String> {
+    pub fn spawn(
+        kiro_path: &str,
+        cwd: &str,
+        agent: Option<&str>,
+        engine: Option<&str>,
+        trust_tools: Option<&str>,
+    ) -> Result<Self, String> {
         let (child, stdin, rx, reader_handle, pending_methods, pgid) =
-            Self::spawn_process(kiro_path, cwd, agent)?;
+            Self::spawn_process(kiro_path, cwd, agent, engine, trust_tools)?;
 
         let mut client = Self {
             child,
@@ -60,14 +68,22 @@ impl AcpClient {
             crash_count: 0,
             max_retries: 3,
             pgid,
+            engine: engine.map(|s| s.to_string()),
+            trust_tools: trust_tools.map(|s| s.to_string()),
         };
         client.send_initialize()?;
         Ok(client)
     }
 
     /// Spawn kiro-cli acp and resume an existing session.
-    pub fn spawn_and_resume(kiro_path: &str, cwd: &str, session_id: &str) -> Result<Self, String> {
-        let mut client = Self::spawn(kiro_path, cwd, None)?;
+    pub fn spawn_and_resume(
+        kiro_path: &str,
+        cwd: &str,
+        session_id: &str,
+        engine: Option<&str>,
+        trust_tools: Option<&str>,
+    ) -> Result<Self, String> {
+        let mut client = Self::spawn(kiro_path, cwd, None, engine, trust_tools)?;
         client.resume_session_id = Some(session_id.to_string());
         Ok(client)
     }
@@ -118,6 +134,19 @@ impl AcpClient {
         let params = SessionCancelParams { session_id };
         self.send_request(
             "session/cancel",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Rewind the session to the previous turn.
+    pub fn send_rewind(&mut self) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or("No active session".to_string())?;
+        let params = SessionRewindParams { session_id };
+        self.send_request(
+            "session/rewind",
             Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
         )
     }
@@ -220,8 +249,13 @@ impl AcpClient {
         let _ = self.child.wait();
 
         self.crash_count += 1;
-        let (child, stdin, rx, reader_handle, pending_methods, pgid) =
-            Self::spawn_process(&self.kiro_path, &self.cwd, None)?;
+        let (child, stdin, rx, reader_handle, pending_methods, pgid) = Self::spawn_process(
+            &self.kiro_path,
+            &self.cwd,
+            None,
+            self.engine.as_deref(),
+            self.trust_tools.as_deref(),
+        )?;
 
         self.child = child;
         self.stdin = stdin;
@@ -252,6 +286,8 @@ impl AcpClient {
         kiro_path: &str,
         cwd: &str,
         agent: Option<&str>,
+        engine: Option<&str>,
+        trust_tools: Option<&str>,
     ) -> Result<
         (
             Child,
@@ -272,6 +308,18 @@ impl AcpClient {
 
         if let Some(name) = agent {
             cmd.args(["--agent", name]);
+        }
+
+        if let Some(eng) = engine {
+            cmd.args(["--agent-engine", eng]);
+        }
+
+        if let Some(tools) = trust_tools {
+            if tools == "all" {
+                cmd.arg("--trust-all-tools");
+            } else {
+                cmd.args(["--trust-tools", tools]);
+            }
         }
 
         // Put child in its own process group for clean termination

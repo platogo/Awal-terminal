@@ -1689,6 +1689,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
             self.resumeACPSession(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId)
         }
+        tab.aiSidePanel.onRewind = { [weak self, weak tab] in
+            guard let tab else { return }
+            if tab.acpClient?.sendRewind() != true {
+                self?.flashStatusBar("ACP: Rewind failed")
+            }
+        }
     }
 
     private func handleFocusChanged(_ terminal: TerminalView, tab: TabState) {
@@ -2298,7 +2304,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.acpClient?.destroy()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
-        if client.spawn(kiroPath: kiroPath, cwd: cwd) {
+        let config = AppConfig.shared
+        let engine = config.kiroAgentEngine
+        let trustTools: String? = config.kiroTrustLevel == .all
+            ? "all"
+            : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
+        if client.spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools) {
             tab.acpClient = client
         } else {
             fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
@@ -2311,7 +2322,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.acpClient?.destroy()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
-        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId) {
+        let config = AppConfig.shared
+        let engine = config.kiroAgentEngine
+        let trustTools: String? = config.kiroTrustLevel == .all
+            ? "all"
+            : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
+        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools) {
             tab.acpClient = client
         } else {
             flashStatusBar("ACP: Failed to resume session")
@@ -2324,6 +2340,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             flashStatusBar("ACP: No active session")
             return
         }
+        activeTab.aiSidePanel.setRewindVisible(false)
         if !acpClient.sendPrompt(text) {
             flashStatusBar("ACP: Failed to send prompt")
         }
@@ -2358,6 +2375,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.toolCallStack?.clearAll()
             self.flashStatusBar("ACP: Turn complete")
             tab.tokenTracker.incrementTurns()
+            tab.aiSidePanel.setRewindVisible(true)
             // Save session metadata
             if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath {
                 let info = SessionManager.SessionInfo(
@@ -2378,6 +2396,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             if let tab, let cwd = tab.statusBar.currentPath {
                 let sessions = SessionManager.shared.loadACPSessions(projectPath: cwd)
                 tab.aiSidePanel.updateSessionHistory(sessions: sessions)
+                // Show rewind button if resuming a session with history
+                if let sid = tab.acpClient?.getSessionId(),
+                   sessions.contains(where: { $0.id == sid && $0.turns > 0 }) {
+                    tab.aiSidePanel.setRewindVisible(true)
+                }
             }
         }
         client.onCancelled = { [weak self] in

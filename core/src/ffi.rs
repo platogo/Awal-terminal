@@ -962,6 +962,8 @@ pub extern "C" fn at_acp_spawn(
     kiro_path: *const c_char,
     cwd: *const c_char,
     agent: *const c_char,
+    engine: *const c_char,
+    trust_tools: *const c_char,
 ) -> *mut ATAcpClient {
     if kiro_path.is_null() || cwd.is_null() {
         return std::ptr::null_mut();
@@ -973,7 +975,17 @@ pub extern "C" fn at_acp_spawn(
     } else {
         unsafe { std::ffi::CStr::from_ptr(agent).to_str().ok() }
     };
-    match AcpClient::spawn(kiro, cwd_str, agent_str) {
+    let engine_str = if engine.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(engine).to_str().ok() }
+    };
+    let trust_tools_str = if trust_tools.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(trust_tools).to_str().ok() }
+    };
+    match AcpClient::spawn(kiro, cwd_str, agent_str, engine_str, trust_tools_str) {
         Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
         Err(e) => {
             eprintln!("at_acp_spawn failed: {e}");
@@ -1087,6 +1099,16 @@ pub extern "C" fn at_acp_cancel(client: *mut ATAcpClient) -> i32 {
     }
 }
 
+/// Rewind session to previous turn. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_send_rewind(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.send_rewind() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
 /// Respond to a permission request. Returns 0 on success, -1 on error.
 #[no_mangle]
 pub extern "C" fn at_acp_respond_permission(
@@ -1191,6 +1213,8 @@ pub extern "C" fn at_acp_spawn_resume(
     kiro_path: *const c_char,
     cwd: *const c_char,
     session_id: *const c_char,
+    engine: *const c_char,
+    trust_tools: *const c_char,
 ) -> *mut ATAcpClient {
     if kiro_path.is_null() || cwd.is_null() || session_id.is_null() {
         return std::ptr::null_mut();
@@ -1198,7 +1222,17 @@ pub extern "C" fn at_acp_spawn_resume(
     let kiro = unsafe { std::ffi::CStr::from_ptr(kiro_path).to_str().unwrap_or("") };
     let cwd_str = unsafe { std::ffi::CStr::from_ptr(cwd).to_str().unwrap_or("") };
     let sid = unsafe { std::ffi::CStr::from_ptr(session_id).to_str().unwrap_or("") };
-    match AcpClient::spawn_and_resume(kiro, cwd_str, sid) {
+    let engine_str = if engine.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(engine).to_str().ok() }
+    };
+    let trust_tools_str = if trust_tools.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(trust_tools).to_str().ok() }
+    };
+    match AcpClient::spawn_and_resume(kiro, cwd_str, sid, engine_str, trust_tools_str) {
         Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
         Err(e) => {
             eprintln!("at_acp_spawn_resume failed: {e}");
