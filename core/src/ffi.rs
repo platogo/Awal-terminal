@@ -931,3 +931,138 @@ pub extern "C" fn at_surface_get_input_line(surface: *const ATSurface) -> *mut c
         Err(_) => std::ptr::null_mut(),
     }
 }
+
+// --- ACP Client ---
+
+use crate::acp::client::AcpClient;
+use crate::acp::reader::AcpEvent;
+
+/// Opaque handle to an ACP client.
+pub struct ATAcpClient(AcpClient);
+
+/// C-compatible ACP event.
+/// event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
+///             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited
+#[repr(C)]
+pub struct ATAcpEvent {
+    pub event_type: u8,
+    pub text: *mut c_char,
+    pub text2: *mut c_char,
+}
+
+fn string_to_c(s: &str) -> *mut c_char {
+    CString::new(s).map_or(std::ptr::null_mut(), |cs| cs.into_raw())
+}
+
+/// Spawn kiro-cli acp. Returns opaque handle or null on failure.
+#[no_mangle]
+pub extern "C" fn at_acp_spawn(kiro_path: *const c_char, cwd: *const c_char) -> *mut ATAcpClient {
+    if kiro_path.is_null() || cwd.is_null() {
+        return std::ptr::null_mut();
+    }
+    let kiro = unsafe { std::ffi::CStr::from_ptr(kiro_path).to_str().unwrap_or("") };
+    let cwd_str = unsafe { std::ffi::CStr::from_ptr(cwd).to_str().unwrap_or("") };
+    match AcpClient::spawn(kiro, cwd_str) {
+        Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
+        Err(e) => {
+            eprintln!("at_acp_spawn failed: {e}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Poll next event. Returns null if no event available.
+/// Caller must free with at_acp_free_event.
+#[no_mangle]
+pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent {
+    let client = mut_ref_or!(client, std::ptr::null_mut());
+    match client.0.poll_event() {
+        Some(event) => {
+            let (event_type, text, text2) = match &event {
+                AcpEvent::Initialized => (0u8, std::ptr::null_mut(), std::ptr::null_mut()),
+                AcpEvent::SessionCreated(id) => (1, string_to_c(id), std::ptr::null_mut()),
+                AcpEvent::TextChunk(t) => (2, string_to_c(t), std::ptr::null_mut()),
+                AcpEvent::ToolCall { id, title, status } => (
+                    3,
+                    string_to_c(title),
+                    string_to_c(&format!("{id}\t{status}")),
+                ),
+                AcpEvent::ToolCallUpdate {
+                    id,
+                    status,
+                    content,
+                } => (
+                    4,
+                    string_to_c(content.as_deref().unwrap_or("")),
+                    string_to_c(&format!("{id}\t{status}")),
+                ),
+                AcpEvent::TurnEnd { stop_reason } => {
+                    (5, std::ptr::null_mut(), string_to_c(stop_reason))
+                }
+                AcpEvent::Error(msg) => (6, string_to_c(msg), std::ptr::null_mut()),
+                AcpEvent::ProcessExited(code) => (
+                    7,
+                    string_to_c(&code.map_or("".to_string(), |c| c.to_string())),
+                    std::ptr::null_mut(),
+                ),
+            };
+            Box::into_raw(Box::new(ATAcpEvent {
+                event_type,
+                text,
+                text2,
+            }))
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Send a text prompt. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_send_prompt(client: *mut ATAcpClient, text: *const c_char) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if text.is_null() {
+        return -1;
+    }
+    let text_str = unsafe { std::ffi::CStr::from_ptr(text).to_str().unwrap_or("") };
+    match client.0.send_prompt(text_str) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Cancel current operation. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_cancel(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.cancel() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Free an event returned by at_acp_poll_event.
+#[no_mangle]
+pub extern "C" fn at_acp_free_event(event: *mut ATAcpEvent) {
+    if event.is_null() {
+        return;
+    }
+    unsafe {
+        let ev = Box::from_raw(event);
+        if !ev.text.is_null() {
+            drop(CString::from_raw(ev.text));
+        }
+        if !ev.text2.is_null() {
+            drop(CString::from_raw(ev.text2));
+        }
+    }
+}
+
+/// Destroy the ACP client (kills child process).
+#[no_mangle]
+pub extern "C" fn at_acp_destroy(client: *mut ATAcpClient) {
+    if !client.is_null() {
+        unsafe {
+            drop(Box::from_raw(client));
+        }
+    }
+}
