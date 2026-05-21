@@ -86,10 +86,13 @@ impl Pty {
                 // to close unconditionally.
                 std::mem::forget(slave);
                 unsafe {
-                    extern "C" {
-                        fn closefrom(lowfd: libc::c_int);
+                    // Close all inherited fds. Slave is already duped to 0/1/2 via dup2 above.
+                    let mut rlim: libc::rlimit = std::mem::zeroed();
+                    libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim);
+                    let max_fd = std::cmp::min(rlim.rlim_cur as i32, 4096);
+                    for fd in 3..max_fd {
+                        libc::close(fd);
                     }
-                    closefrom(3);
                 }
 
                 // Set environment variables
