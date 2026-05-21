@@ -1,4 +1,5 @@
 import AppKit
+import os.log
 
 /// Type of registry source.
 enum RegistryType: String {
@@ -160,17 +161,15 @@ struct AppConfig {
     static func load() -> AppConfig {
         var config = AppConfig()
 
-        let maxConfigSize: UInt64 = 1_048_576
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: configFile.path),
-           let fileSize = attrs[.size] as? UInt64,
-           fileSize > maxConfigSize {
-            NSLog("Config file exceeds 1 MB (%llu bytes), using defaults", fileSize)
+        let configPath = configFile.path
+        guard let handle = FileHandle(forReadingAtPath: configPath) else { return config }
+        defer { handle.closeFile() }
+        let data = handle.readData(ofLength: 1_048_576 + 1)  // read 1 byte more than limit
+        if data.count > 1_048_576 {
+            os_log(.error, "Config file exceeds 1MB limit, using defaults")
             return config
         }
-
-        guard let contents = try? String(contentsOf: configFile, encoding: .utf8) else {
-            return config
-        }
+        guard let contents = String(data: data, encoding: .utf8) else { return config }
 
         let parsed = parseToml(contents)
 

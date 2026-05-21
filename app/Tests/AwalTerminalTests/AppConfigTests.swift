@@ -139,6 +139,30 @@ final class AppConfigTests: XCTestCase {
 
     // MARK: - Danger mode non-persistence
 
+    func testOversizedConfigFileUsesDefaults() {
+        let configDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/awal")
+        let configFile = configDir.appendingPathComponent("config.toml")
+        let originalContents = try? String(contentsOf: configFile, encoding: .utf8)
+
+        // Write a config file larger than 1MB
+        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        let oversized = String(repeating: "a", count: 1_048_576 + 1)
+        try? oversized.write(to: configFile, atomically: true, encoding: .utf8)
+
+        AppConfig.reload()
+        // Should use defaults (font size 13.0) since file exceeds limit
+        XCTAssertEqual(AppConfig.shared.fontSize, 13.0)
+        XCTAssertTrue(AppConfig.shared.fontFamily.isEmpty)
+
+        // Restore original config
+        if let original = originalContents {
+            try? original.write(to: configFile, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(at: configFile)
+        }
+    }
+
     func testDangerModeNotRestoredAfterReload() {
         let configDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/awal")
