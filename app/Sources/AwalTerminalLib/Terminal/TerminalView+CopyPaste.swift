@@ -299,8 +299,7 @@ extension TerminalView {
     func saveToFileAndPastePath(_ text: String, completion: @escaping (String) -> Void) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let ext = (trimmed.hasPrefix("{") || trimmed.hasPrefix("[")) ? "json" : "txt"
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let filename = ".pasted-content-\(timestamp).\(ext)"
+        let filename = ".pasted-content-\(UUID().uuidString).\(ext)"
 
         let dir: String
         if let wd = lastWorkingDir, FileManager.default.fileExists(atPath: wd) {
@@ -310,13 +309,17 @@ extension TerminalView {
         }
 
         let path = (dir as NSString).appendingPathComponent(filename)
-        do {
-            try text.write(toFile: path, atomically: true, encoding: .utf8)
-            completion(path)
-        } catch {
-            // Fall back to pasting all if file write fails
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else {
             completion(text)
+            return
         }
+        let data = text.data(using: .utf8) ?? Data()
+        data.withUnsafeBytes { ptr in
+            _ = write(fd, ptr.baseAddress!, data.count)
+        }
+        close(fd)
+        completion(path)
     }
 
     /// Format a number with grouping separators for display.
