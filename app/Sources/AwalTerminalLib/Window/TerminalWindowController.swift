@@ -21,6 +21,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var debounceSaveTimer: Timer?
     private var periodicSaveTimer: Timer?
     private var acpClient: ACPClient?
+    private var toolCallStack: ToolCallStackView?
 
     private(set) var tabs: [TabState] = []
     private(set) var tabGroups: [TabGroup] = []
@@ -2284,6 +2285,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.flashStatusBar("ACP Error: \(msg)")
         }
         client.onTurnEnd = { [weak self] _ in
+            self?.toolCallStack?.clearAll()
             self?.flashStatusBar("ACP: Turn complete")
         }
         client.onSessionReady = { [weak self] in
@@ -2291,7 +2293,15 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         client.onProcessExited = { [weak self] _ in
             self?.acpClient = nil
+            self?.toolCallStack?.clearAll()
             self?.flashStatusBar("ACP: Disconnected")
+        }
+        client.onToolCallStarted = { [weak self] state in
+            self?.ensureToolCallStack()
+            self?.toolCallStack?.addToolCall(state)
+        }
+        client.onToolCallUpdated = { [weak self] id, status, content in
+            self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
         }
         if client.spawn(kiroPath: kiroPath, cwd: cwd) {
             acpClient = client
@@ -2309,6 +2319,21 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         if !acpClient.sendPrompt(text) {
             flashStatusBar("ACP: Failed to send prompt")
         }
+    }
+
+    private func ensureToolCallStack() {
+        guard toolCallStack == nil else { return }
+        let stack = ToolCallStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let panel = activeTab.aiSidePanel
+        panel.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
+            stack.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -8),
+            stack.heightAnchor.constraint(lessThanOrEqualToConstant: 300),
+        ])
+        toolCallStack = stack
     }
 }
 

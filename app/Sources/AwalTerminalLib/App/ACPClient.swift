@@ -9,9 +9,12 @@ class ACPClient {
     var onTextChunk: ((String) -> Void)?
     var onTurnEnd: ((String) -> Void)?
     var onError: ((String) -> Void)?
-    var onToolCall: ((String, String) -> Void)?
+    var onToolCallStarted: ((ToolCallState) -> Void)?
+    var onToolCallUpdated: ((String, ToolCallStatus, String?) -> Void)?
     var onSessionReady: (() -> Void)?
     var onProcessExited: ((Int32?) -> Void)?
+
+    private(set) var activeToolCalls: [String: ToolCallState] = [:]
 
     func spawn(kiroPath: String, cwd: String) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
@@ -81,15 +84,35 @@ class ACPClient {
                 if let text { onTextChunk?(text) }
             case 3: // ToolCall
                 if let title = text, let meta = text2 {
-                    let parts = meta.split(separator: "\t", maxSplits: 1)
-                    let status = parts.count > 1 ? String(parts[1]) : ""
-                    onToolCall?(title, status)
+                    let parts = meta.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                    let id = parts.count > 0 ? String(parts[0]) : ""
+                    let statusStr = parts.count > 1 ? String(parts[1]) : ""
+                    let kindStr = parts.count > 2 ? String(parts[2]) : ""
+                    let kind = ToolCallKind(rawValue: kindStr) ?? .unknown
+                    let status: ToolCallStatus = statusStr == "completed" ? .completed
+                        : statusStr == "failed" ? .failed
+                        : statusStr == "running" ? .running : .pending
+                    let state = ToolCallState(id: id, title: title, kind: kind, status: status)
+                    activeToolCalls[id] = state
+                    onToolCallStarted?(state)
                 }
             case 4: // ToolCallUpdate
-                if let content = text, !content.isEmpty {
-                    onTextChunk?(content)
+                if let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    let id = parts.count > 0 ? String(parts[0]) : ""
+                    let statusStr = parts.count > 1 ? String(parts[1]) : ""
+                    let status: ToolCallStatus = statusStr == "completed" ? .completed
+                        : statusStr == "failed" ? .failed
+                        : statusStr == "running" ? .running : .pending
+                    let content = (text?.isEmpty == false) ? text : nil
+                    if let existing = activeToolCalls[id] {
+                        existing.status = status
+                        if let c = content { existing.content += c }
+                    }
+                    onToolCallUpdated?(id, status, content)
                 }
             case 5: // TurnEnd
+                activeToolCalls.removeAll()
                 onTurnEnd?(text2 ?? "")
             case 6: // Error
                 if let text { onError?(text) }
