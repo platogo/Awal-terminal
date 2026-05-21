@@ -1,5 +1,6 @@
 import AppKit
 import CAwalTerminal
+import os.log
 
 // MARK: - Copy/Paste (Cmd+C, Cmd+V)
 
@@ -299,7 +300,6 @@ extension TerminalView {
     func saveToFileAndPastePath(_ text: String, completion: @escaping (String) -> Void) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let ext = (trimmed.hasPrefix("{") || trimmed.hasPrefix("[")) ? "json" : "txt"
-        let filename = ".pasted-content-\(UUID().uuidString).\(ext)"
 
         let dir: String
         if let wd = lastWorkingDir, FileManager.default.fileExists(atPath: wd) {
@@ -308,10 +308,17 @@ extension TerminalView {
             dir = NSTemporaryDirectory()
         }
 
-        let path = (dir as NSString).appendingPathComponent(filename)
-        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        // Retry up to 3 times with new UUIDs on O_EXCL failure
+        var fd: Int32 = -1
+        var filePath: String = ""
+        for _ in 0..<3 {
+            let name = ".pasted-content-\(UUID().uuidString).\(ext)"
+            filePath = (dir as NSString).appendingPathComponent(name)
+            fd = open(filePath, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+            if fd >= 0 { break }
+        }
         guard fd >= 0 else {
-            completion(text)
+            os_log(.error, "Failed to create paste file after retries")
             return
         }
         let data = text.data(using: .utf8) ?? Data()
@@ -319,7 +326,7 @@ extension TerminalView {
             _ = write(fd, ptr.baseAddress!, data.count)
         }
         close(fd)
-        completion(path)
+        completion(filePath)
     }
 
     /// Format a number with grouping separators for display.
