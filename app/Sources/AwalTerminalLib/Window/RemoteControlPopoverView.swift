@@ -32,6 +32,8 @@ class RemoteControlPopoverView: NSViewController {
             let warning = NSTextField(labelWithString: "⚠️ Unrecognized URL — verify before scanning")
             warning.font = NSFont.systemFont(ofSize: 11, weight: .medium)
             warning.textColor = .systemOrange
+            warning.lineBreakMode = .byWordWrapping
+            warning.maximumNumberOfLines = 0
             warning.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(warning)
             warningLabel = warning
@@ -67,7 +69,8 @@ class RemoteControlPopoverView: NSViewController {
             qrTopAnchor = warning.bottomAnchor
             NSLayoutConstraint.activate([
                 warning.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 8),
-                warning.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                warning.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+                warning.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             ])
         } else {
             qrTopAnchor = subtitleLabel.bottomAnchor
@@ -104,8 +107,8 @@ class RemoteControlPopoverView: NSViewController {
 
     private func isURLTrusted(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString),
-              let scheme = url.scheme, ["http", "https"].contains(scheme),
-              let host = url.host else { return false }
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = url.host?.lowercased() else { return false }
         return host == "localhost" || host == "127.0.0.1" || host == "::1"
             || host.hasSuffix(".claude.ai") || host == "claude.ai"
             || host.hasSuffix(".anthropic.com") || host == "anthropic.com"
