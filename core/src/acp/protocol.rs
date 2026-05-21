@@ -99,6 +99,13 @@ pub struct SessionCancelParams {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionCancelSubagentParams {
+    pub session_id: String,
+    pub subagent_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionResumeParams {
     pub session_id: String,
     pub cwd: String,
@@ -154,6 +161,34 @@ pub enum SessionUpdate {
         content: Option<ContentBlock>,
     },
     TurnEnd,
+    SubagentSpawned {
+        #[serde(rename = "subagentId")]
+        subagent_id: String,
+        name: String,
+        role: Option<String>,
+        #[serde(rename = "parentSessionId")]
+        parent_session_id: Option<String>,
+        #[serde(rename = "dependsOn")]
+        depends_on: Option<Vec<String>>,
+    },
+    SubagentProgress {
+        #[serde(rename = "subagentId")]
+        subagent_id: String,
+        phase: String,
+        #[serde(rename = "tokensUsed")]
+        tokens_used: Option<u64>,
+    },
+    SubagentComplete {
+        #[serde(rename = "subagentId")]
+        subagent_id: String,
+        #[serde(rename = "tokensUsed")]
+        tokens_used: Option<u64>,
+    },
+    SubagentError {
+        #[serde(rename = "subagentId")]
+        subagent_id: String,
+        message: String,
+    },
 }
 
 // --- Permission request (server-to-client) ---

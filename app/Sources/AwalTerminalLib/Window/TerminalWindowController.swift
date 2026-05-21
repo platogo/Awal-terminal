@@ -2296,6 +2296,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func startACPSession(kiroPath: String, cwd: String) {
         let tab = activeTab
         tab.acpClient?.destroy()
+        tab.subagentTracker.reset()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
         if client.spawn(kiroPath: kiroPath, cwd: cwd) {
@@ -2309,6 +2310,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func resumeACPSession(kiroPath: String, cwd: String, sessionId: String) {
         let tab = activeTab
         tab.acpClient?.destroy()
+        tab.subagentTracker.reset()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
         if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId) {
@@ -2422,6 +2424,18 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             )
             self.ensureToolCallStack()
             self.toolCallStack?.addPermissionRequest(request)
+        }
+        client.onSubagentSpawned = { [weak tab] id, name, role, parentSid, deps in
+            tab?.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
+        }
+        client.onSubagentProgress = { [weak tab] id, phase, tokens in
+            tab?.subagentTracker.handleProgress(id: id, phase: phase, tokensUsed: tokens)
+        }
+        client.onSubagentComplete = { [weak tab] id, tokens in
+            tab?.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
+        }
+        client.onSubagentError = { [weak tab] id, message in
+            tab?.subagentTracker.handleError(id: id, message: message)
         }
     }
 

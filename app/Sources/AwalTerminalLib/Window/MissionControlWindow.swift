@@ -40,7 +40,14 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
         var isDanger: Bool { tab.isDangerMode }
     }
 
+    /// A row in the table — either a top-level agent or an indented subagent.
+    enum DisplayRow {
+        case agent(AgentRow)
+        case subagent(SubagentState, ACPClient?)
+    }
+
     private var rows: [AgentRow] = []
+    private var displayRows: [DisplayRow] = []
     private var refreshTimer: Timer?
 
     // MARK: - UI
@@ -52,6 +59,10 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
     private let totalCostLabel = NSTextField(labelWithString: "")
     private let totalTokensLabel = NSTextField(labelWithString: "")
     private let activeAgentLabel = NSTextField(labelWithString: "")
+
+    // Pipeline DAG
+    private let dagView = PipelineDAGView()
+    private var dagHeightConstraint: NSLayoutConstraint?
 
     init() {
         let window = NSWindow(
@@ -152,6 +163,15 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
 
         scrollView.documentView = tableView
 
+        // DAG view
+        dagView.translatesAutoresizingMaskIntoConstraints = false
+        dagView.wantsLayer = true
+        dagView.layer?.backgroundColor = NSColor(white: 0.08, alpha: 1.0).cgColor
+        contentView.addSubview(dagView)
+
+        let dagHeight = dagView.heightAnchor.constraint(equalToConstant: 0)
+        dagHeightConstraint = dagHeight
+
         // Constraints
         NSLayoutConstraint.activate([
             headerView.topAnchor.constraint(equalTo: contentView.topAnchor),
@@ -171,7 +191,12 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
             scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: dagView.topAnchor),
+
+            dagView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            dagView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            dagView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            dagHeight,
         ])
     }
 
@@ -179,6 +204,7 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
 
     private func refreshData() {
         rows.removeAll()
+        displayRows.removeAll()
 
         for controller in TerminalWindowTracker.shared.allControllers {
             for (index, tab) in controller.tabs.enumerated() {
@@ -186,12 +212,19 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
                 // Only show tabs with an active AI session (not plain Shell)
                 let model = tab.statusBar.currentModelName
                 guard !model.isEmpty && model != "Shell" else { continue }
-                rows.append(AgentRow(
+                let agentRow = AgentRow(
                     windowController: controller,
                     tabIndex: index,
                     tab: tab,
                     terminal: terminal
-                ))
+                )
+                rows.append(agentRow)
+                displayRows.append(.agent(agentRow))
+
+                // Add subagent rows indented under parent
+                for sub in tab.subagentTracker.orderedSubagents {
+                    displayRows.append(.subagent(sub, tab.acpClient))
+                }
             }
         }
 
@@ -220,20 +253,40 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
         }
 
         tableView.reloadData()
+
+        // Update DAG view — show if any subagents have dependencies
+        let allSubagents = rows.flatMap { $0.tab.subagentTracker.orderedSubagents }
+        let hasDeps = allSubagents.contains { !$0.dependsOn.isEmpty }
+        if hasDeps {
+            dagView.update(subagents: allSubagents)
+            dagView.invalidateIntrinsicContentSize()
+            dagHeightConstraint?.constant = min(dagView.intrinsicContentSize.height, 150)
+        } else {
+            dagView.update(subagents: [])
+            dagHeightConstraint?.constant = 0
+        }
     }
 
     // MARK: - NSTableViewDataSource
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        rows.count
+        displayRows.count
     }
 
     // MARK: - NSTableViewDelegate
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < rows.count, let colId = tableColumn?.identifier.rawValue else { return nil }
-        let agent = rows[row]
+        guard row < displayRows.count, let colId = tableColumn?.identifier.rawValue else { return nil }
 
+        switch displayRows[row] {
+        case .agent(let agent):
+            return viewForAgent(agent, column: colId, row: row)
+        case .subagent(let sub, _):
+            return viewForSubagent(sub, column: colId, row: row)
+        }
+    }
+
+    private func viewForAgent(_ agent: AgentRow, column colId: String, row: Int) -> NSView? {
         switch colId {
         case "status":
             return makeStatusDot(agent)
@@ -268,15 +321,56 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
         }
     }
 
+    private func viewForSubagent(_ sub: SubagentState, column colId: String, row: Int) -> NSView? {
+        switch colId {
+        case "status":
+            return makeSubagentStatusDot(sub)
+        case "model":
+            // Indented name/role
+            let display = sub.role.map { "\(sub.name) (\($0))" } ?? sub.name
+            return makeLabel("  ↳ \(display)")
+        case "dir":
+            return makeLabel("")
+        case "phase":
+            return makeLabel(sub.phase)
+        case "tokens":
+            return makeLabel(sub.tokensUsed > 0 ? formatTokenCount(Int(sub.tokensUsed)) : "—")
+        case "cost":
+            return makeLabel("—")
+        case "elapsed":
+            let elapsed = Int(sub.elapsed)
+            let m = elapsed / 60
+            let s = elapsed % 60
+            return makeLabel(String(format: "%d:%02d", m, s))
+        case "kill":
+            if sub.isActive {
+                return makeSubagentKillButton(row)
+            }
+            return makeLabel("")
+        default:
+            return nil
+        }
+    }
+
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let rowView = NSTableRowView()
         rowView.wantsLayer = true
-        if row < rows.count && rows[row].isGenerating {
-            rowView.backgroundColor = NSColor(red: 0.1, green: 0.15, blue: 0.1, alpha: 1.0)
-        } else if row % 2 == 0 {
-            rowView.backgroundColor = NSColor(white: 0.14, alpha: 1.0)
-        } else {
-            rowView.backgroundColor = .clear
+        guard row < displayRows.count else { return rowView }
+        switch displayRows[row] {
+        case .agent(let agent):
+            if agent.isGenerating {
+                rowView.backgroundColor = NSColor(red: 0.1, green: 0.15, blue: 0.1, alpha: 1.0)
+            } else if row % 2 == 0 {
+                rowView.backgroundColor = NSColor(white: 0.14, alpha: 1.0)
+            } else {
+                rowView.backgroundColor = .clear
+            }
+        case .subagent(let sub, _):
+            if sub.isActive {
+                rowView.backgroundColor = NSColor(red: 0.08, green: 0.12, blue: 0.18, alpha: 1.0)
+            } else {
+                rowView.backgroundColor = NSColor(white: 0.11, alpha: 1.0)
+            }
         }
         return rowView
     }
@@ -344,8 +438,8 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
 
     @objc private func killAgent(_ sender: NSButton) {
         let row = sender.tag
-        guard row < rows.count else { return }
-        let agent = rows[row]
+        guard row < displayRows.count else { return }
+        guard case .agent(let agent) = displayRows[row] else { return }
 
         let alert = NSAlert()
         alert.messageText = "Kill Agent?"
@@ -362,7 +456,71 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
         }
     }
 
+    @objc private func killSubagent(_ sender: NSButton) {
+        let row = sender.tag
+        guard row < displayRows.count else { return }
+        guard case .subagent(let sub, let client) = displayRows[row] else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Cancel Subagent?"
+        alert.informativeText = "This will cancel the \(sub.name) subagent."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel Subagent")
+        alert.addButton(withTitle: "Keep Running")
+
+        guard let window = self.window else { return }
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn {
+                _ = client?.cancelSubagent(id: sub.id)
+            }
+        }
+    }
+
     // MARK: - Helpers
+
+    private func makeSubagentStatusDot(_ sub: SubagentState) -> NSView {
+        let cell = NSView()
+        let dot = NSView()
+        dot.wantsLayer = true
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.layer?.cornerRadius = 4
+
+        switch sub.status {
+        case .running:
+            dot.layer?.backgroundColor = NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1.0).cgColor
+        case .completed:
+            dot.layer?.backgroundColor = NSColor(red: 0.3, green: 0.85, blue: 0.4, alpha: 1.0).cgColor
+        case .error(_):
+            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        }
+
+        cell.addSubview(dot)
+        NSLayoutConstraint.activate([
+            dot.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+            dot.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 8),
+            dot.heightAnchor.constraint(equalToConstant: 8),
+        ])
+        return cell
+    }
+
+    private func makeSubagentKillButton(_ row: Int) -> NSView {
+        let cell = NSView()
+        let btn = NSButton(title: "Stop", target: self, action: #selector(killSubagent(_:)))
+        btn.tag = row
+        btn.bezelStyle = .rounded
+        btn.focusRingType = .none
+        btn.refusesFirstResponder = true
+        btn.contentTintColor = .systemOrange
+        btn.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(btn)
+        NSLayoutConstraint.activate([
+            btn.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+            btn.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        return cell
+    }
 
     private func formatTokenCount(_ n: Int) -> String {
         if n >= 1_000_000 {

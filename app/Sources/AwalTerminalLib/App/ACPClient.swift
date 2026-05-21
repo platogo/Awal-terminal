@@ -19,6 +19,10 @@ class ACPClient {
     var onRecoveryFailed: (() -> Void)?
     var onAuthRequired: ((String) -> Void)?
     var onFsWriteRequest: ((UInt64, String, String) -> Void)?
+    var onSubagentSpawned: ((String, String, String?, String?, [String]) -> Void)?
+    var onSubagentProgress: ((String, String, UInt64?) -> Void)?
+    var onSubagentComplete: ((String, UInt64?) -> Void)?
+    var onSubagentError: ((String, String) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
@@ -91,6 +95,13 @@ class ACPClient {
     func cancel() -> Bool {
         guard let handle else { return false }
         return at_acp_cancel(handle) == 0
+    }
+
+    func cancelSubagent(id: String) -> Bool {
+        guard let handle else { return false }
+        return id.withCString { idPtr in
+            at_acp_cancel_subagent(handle, idPtr) == 0
+        }
     }
 
     func forceKill() {
@@ -258,6 +269,34 @@ class ACPClient {
                         // No handler — auto-deny
                         respondFsWrite(requestId: requestId, success: false)
                     }
+                }
+            case 13: // SubagentSpawned
+                if let name = text, let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+                    let subId = parts.count > 0 ? String(parts[0]) : ""
+                    let role = parts.count > 1 ? String(parts[1]) : nil
+                    let parentSid = parts.count > 2 ? String(parts[2]) : nil
+                    let depsStr = parts.count > 3 ? String(parts[3]) : ""
+                    let deps = depsStr.isEmpty ? [] : depsStr.split(separator: ",").map(String.init)
+                    onSubagentSpawned?(subId, name, role?.isEmpty == true ? nil : role, parentSid?.isEmpty == true ? nil : parentSid, deps)
+                }
+            case 14: // SubagentProgress
+                if let phase = text, let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    let subId = parts.count > 0 ? String(parts[0]) : ""
+                    let tokens: UInt64? = parts.count > 1 ? UInt64(parts[1]).flatMap { $0 == UInt64.max ? nil : $0 } : nil
+                    onSubagentProgress?(subId, phase, tokens)
+                }
+            case 15: // SubagentComplete
+                if let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    let subId = parts.count > 0 ? String(parts[0]) : ""
+                    let tokens: UInt64? = parts.count > 1 ? UInt64(parts[1]).flatMap { $0 == UInt64.max ? nil : $0 } : nil
+                    onSubagentComplete?(subId, tokens)
+                }
+            case 16: // SubagentError
+                if let message = text, let subId = text2 {
+                    onSubagentError?(subId, message)
                 }
             default:
                 break

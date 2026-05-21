@@ -51,6 +51,30 @@ pub enum AcpEvent {
         path: String,
         content: String,
     },
+    /// A subagent was spawned.
+    SubagentSpawned {
+        subagent_id: String,
+        name: String,
+        role: Option<String>,
+        parent_session_id: Option<String>,
+        depends_on: Vec<String>,
+    },
+    /// A subagent reported progress.
+    SubagentProgress {
+        subagent_id: String,
+        phase: String,
+        tokens_used: Option<u64>,
+    },
+    /// A subagent completed successfully.
+    SubagentComplete {
+        subagent_id: String,
+        tokens_used: Option<u64>,
+    },
+    /// A subagent encountered an error.
+    SubagentError {
+        subagent_id: String,
+        message: String,
+    },
 }
 
 /// Auth-related JSON-RPC error codes.
@@ -200,6 +224,42 @@ fn parse_message(
                 }),
                 SessionUpdate::TurnEnd => Some(AcpEvent::TurnEnd {
                     stop_reason: "end_turn".to_string(),
+                }),
+                SessionUpdate::SubagentSpawned {
+                    subagent_id,
+                    name,
+                    role,
+                    parent_session_id,
+                    depends_on,
+                } => Some(AcpEvent::SubagentSpawned {
+                    subagent_id,
+                    name,
+                    role,
+                    parent_session_id,
+                    depends_on: depends_on.unwrap_or_default(),
+                }),
+                SessionUpdate::SubagentProgress {
+                    subagent_id,
+                    phase,
+                    tokens_used,
+                } => Some(AcpEvent::SubagentProgress {
+                    subagent_id,
+                    phase,
+                    tokens_used,
+                }),
+                SessionUpdate::SubagentComplete {
+                    subagent_id,
+                    tokens_used,
+                } => Some(AcpEvent::SubagentComplete {
+                    subagent_id,
+                    tokens_used,
+                }),
+                SessionUpdate::SubagentError {
+                    subagent_id,
+                    message,
+                } => Some(AcpEvent::SubagentError {
+                    subagent_id,
+                    message,
                 }),
             }
         } else {
@@ -398,6 +458,94 @@ mod tests {
                 assert_eq!(content, "hello");
             }
             _ => panic!("expected FsWriteRequest"),
+        }
+    }
+
+    #[test]
+    fn parse_subagent_spawned_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_spawned","subagentId":"sub-1","name":"researcher","role":"code-review","parentSessionId":"s1","dependsOn":["sub-0"]}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SubagentSpawned {
+                subagent_id,
+                name,
+                role,
+                parent_session_id,
+                depends_on,
+            } => {
+                assert_eq!(subagent_id, "sub-1");
+                assert_eq!(name, "researcher");
+                assert_eq!(role.as_deref(), Some("code-review"));
+                assert_eq!(parent_session_id.as_deref(), Some("s1"));
+                assert_eq!(depends_on, vec!["sub-0"]);
+            }
+            _ => panic!("expected SubagentSpawned"),
+        }
+    }
+
+    #[test]
+    fn parse_subagent_progress_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_progress","subagentId":"sub-1","phase":"Analyzing files","tokensUsed":1500}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SubagentProgress {
+                subagent_id,
+                phase,
+                tokens_used,
+            } => {
+                assert_eq!(subagent_id, "sub-1");
+                assert_eq!(phase, "Analyzing files");
+                assert_eq!(tokens_used, Some(1500));
+            }
+            _ => panic!("expected SubagentProgress"),
+        }
+    }
+
+    #[test]
+    fn parse_subagent_complete_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_complete","subagentId":"sub-1","tokensUsed":3200}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SubagentComplete {
+                subagent_id,
+                tokens_used,
+            } => {
+                assert_eq!(subagent_id, "sub-1");
+                assert_eq!(tokens_used, Some(3200));
+            }
+            _ => panic!("expected SubagentComplete"),
+        }
+    }
+
+    #[test]
+    fn parse_subagent_error_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_error","subagentId":"sub-1","message":"timeout exceeded"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SubagentError {
+                subagent_id,
+                message,
+            } => {
+                assert_eq!(subagent_id, "sub-1");
+                assert_eq!(message, "timeout exceeded");
+            }
+            _ => panic!("expected SubagentError"),
         }
     }
 }

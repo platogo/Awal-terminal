@@ -8,8 +8,8 @@ use std::thread::JoinHandle;
 
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
-    JsonRpcResponseOut, SessionCancelParams, SessionNewParams, SessionPromptParams,
-    SessionResumeParams,
+    JsonRpcResponseOut, SessionCancelParams, SessionCancelSubagentParams, SessionNewParams,
+    SessionPromptParams, SessionResumeParams,
 };
 use crate::acp::reader::{spawn_reader, AcpEvent};
 
@@ -118,6 +118,22 @@ impl AcpClient {
         let params = SessionCancelParams { session_id };
         self.send_request(
             "session/cancel",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Cancel a specific subagent by sending session/cancelSubagent.
+    pub fn cancel_subagent(&mut self, subagent_id: &str) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or("No active session".to_string())?;
+        let params = SessionCancelSubagentParams {
+            session_id,
+            subagent_id: subagent_id.to_string(),
+        };
+        self.send_request(
+            "session/cancelSubagent",
             Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
         )
     }
