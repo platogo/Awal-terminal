@@ -23,6 +23,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var acpClient: ACPClient?
     private var toolCallStack: ToolCallStackView?
 
+    /// Exposed for keyboard shortcut interception from TerminalView.
+    var toolCallStackForPermissions: ToolCallStackView? { toolCallStack }
+
     private(set) var tabs: [TabState] = []
     private(set) var tabGroups: [TabGroup] = []
     private(set) var activeTabIndex: Int = 0
@@ -2303,6 +2306,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onToolCallUpdated = { [weak self] id, status, content in
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
         }
+        client.onPermissionRequest = { [weak self] request in
+            self?.ensureToolCallStack()
+            self?.toolCallStack?.addPermissionRequest(request)
+        }
         if client.spawn(kiroPath: kiroPath, cwd: cwd) {
             acpClient = client
         } else {
@@ -2324,6 +2331,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private func ensureToolCallStack() {
         guard toolCallStack == nil else { return }
         let stack = ToolCallStackView()
+        stack.permissionDelegate = self
         stack.translatesAutoresizingMaskIntoConstraints = false
         let panel = activeTab.aiSidePanel
         panel.addSubview(stack)
@@ -2334,6 +2342,20 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             stack.heightAnchor.constraint(lessThanOrEqualToConstant: 300),
         ])
         toolCallStack = stack
+    }
+}
+
+// MARK: - PermissionApprovalDelegate
+
+extension TerminalWindowController: PermissionApprovalDelegate {
+    func permissionApproved(requestId: UInt64) {
+        acpClient?.respondPermission(requestId: requestId, approved: true)
+        toolCallStack?.removePermissionRequest(requestId: requestId)
+    }
+
+    func permissionRejected(requestId: UInt64) {
+        acpClient?.respondPermission(requestId: requestId, approved: false)
+        toolCallStack?.removePermissionRequest(requestId: requestId)
     }
 }
 

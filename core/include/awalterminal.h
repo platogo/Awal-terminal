@@ -75,7 +75,8 @@ typedef struct CRegionSummary {
 /**
  * C-compatible ACP event.
  * event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
- *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited
+ *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
+ *             8=PermissionRequest
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -452,6 +453,13 @@ int32_t at_acp_send_prompt(struct ATAcpClient *client,
  * Cancel current operation. Returns 0 on success, -1 on error.
  */
 int32_t at_acp_cancel(struct ATAcpClient *client);
+
+/**
+ * Respond to a permission request. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_respond_permission(struct ATAcpClient *client,
+                                  uint64_t request_id,
+                                  bool approved);
 
 /**
  * Free an event returned by at_acp_poll_event.

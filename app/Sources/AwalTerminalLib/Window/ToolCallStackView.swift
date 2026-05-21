@@ -5,6 +5,8 @@ class ToolCallStackView: NSView {
     private let scrollView = NSScrollView()
     private let stackView = NSStackView()
     private var cardMap: [String: ToolCallCardView] = [:]
+    private var permissionCards: [UInt64: PermissionApprovalView] = [:]
+    weak var permissionDelegate: PermissionApprovalDelegate?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -69,5 +71,39 @@ class ToolCallStackView: NSView {
     func toggleAllExpanded() {
         allExpanded.toggle()
         cardMap.values.forEach { $0.setExpanded(allExpanded) }
+    }
+
+    func addPermissionRequest(_ request: ACPClient.PermissionRequest) {
+        let timeout = AppConfig.shared.kiroPermissionTimeout
+        let card = PermissionApprovalView(request: request, timeout: timeout)
+        card.delegate = permissionDelegate
+        card.translatesAutoresizingMaskIntoConstraints = false
+        stackView.insertArrangedSubview(card, at: 0)
+        card.widthAnchor.constraint(equalTo: stackView.widthAnchor).isActive = true
+        permissionCards[request.requestId] = card
+    }
+
+    func removePermissionRequest(requestId: UInt64) {
+        guard let card = permissionCards.removeValue(forKey: requestId) else { return }
+        stackView.removeArrangedSubview(card)
+        card.removeFromSuperview()
+    }
+
+    /// Handle keyboard shortcut for topmost permission card.
+    /// Returns true if a permission action was taken.
+    func handlePermissionKey(isEnter: Bool) -> Bool {
+        guard let firstCard = stackView.arrangedSubviews
+                    .compactMap({ $0 as? PermissionApprovalView })
+                    .first else { return false }
+        if isEnter {
+            permissionDelegate?.permissionApproved(requestId: firstCard.requestId)
+        } else {
+            permissionDelegate?.permissionRejected(requestId: firstCard.requestId)
+        }
+        return true
+    }
+
+    var hasPendingPermissions: Bool {
+        !permissionCards.isEmpty
     }
 }

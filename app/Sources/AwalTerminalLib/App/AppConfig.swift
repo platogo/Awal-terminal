@@ -35,6 +35,10 @@ enum TabBarOrientation: String {
     case horizontal, vertical
 }
 
+enum KiroTrustLevel: String {
+    case all, safe, none
+}
+
 /// Application configuration loaded from ~/.config/awal/config.toml
 struct AppConfig {
 
@@ -110,6 +114,8 @@ struct AppConfig {
     // Kiro
     var kiroBinaryPath: String?
     var kiroDefaultAgent: String?
+    var kiroTrustLevel: KiroTrustLevel = .safe
+    var kiroPermissionTimeout: Int = 60
 
     // Sleep prevention (keep display awake during terminal activity)
     var preventSleep: Bool = false
@@ -246,6 +252,8 @@ struct AppConfig {
         // Kiro
         if let v = parsed["kiro.binary_path"] { config.kiroBinaryPath = v }
         if let v = parsed["kiro.default_agent"] { config.kiroDefaultAgent = v }
+        if let v = parsed["kiro.trust"] { config.kiroTrustLevel = KiroTrustLevel(rawValue: v) ?? .safe }
+        if let v = parsed["kiro.permission_timeout"], let n = Int(v) { config.kiroPermissionTimeout = max(0, n) }
 
         // Sleep prevention
         if let v = parsed["system.prevent_sleep"] { config.preventSleep = v == "true" }

@@ -13,8 +13,17 @@ class ACPClient {
     var onToolCallUpdated: ((String, ToolCallStatus, String?) -> Void)?
     var onSessionReady: (() -> Void)?
     var onProcessExited: ((Int32?) -> Void)?
+    var onPermissionRequest: ((PermissionRequest) -> Void)?
 
     private(set) var activeToolCalls: [String: ToolCallState] = [:]
+
+    struct PermissionRequest {
+        let requestId: UInt64
+        let toolCallId: String
+        let toolName: String
+        let description: String
+        let kind: ToolCallKind
+    }
 
     func spawn(kiroPath: String, cwd: String) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
@@ -38,6 +47,11 @@ class ACPClient {
     func cancel() -> Bool {
         guard let handle else { return false }
         return at_acp_cancel(handle) == 0
+    }
+
+    func respondPermission(requestId: UInt64, approved: Bool) {
+        guard let handle else { return }
+        _ = at_acp_respond_permission(handle, requestId, approved)
     }
 
     func destroy() {
@@ -120,9 +134,41 @@ class ACPClient {
                 let code = text.flatMap { Int32($0) }
                 onProcessExited?(code)
                 destroy()
+            case 8: // PermissionRequest
+                if let desc = text, let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+                    guard let requestId = parts.first.flatMap({ UInt64($0) }), requestId > 0 else { break }
+                    let toolCallId = parts.count > 1 ? String(parts[1]) : ""
+                    let toolName = parts.count > 2 ? String(parts[2]) : ""
+                    let kindStr = parts.count > 3 ? String(parts[3]) : ""
+                    let kind = ToolCallKind(rawValue: kindStr) ?? .unknown
+                    let request = PermissionRequest(
+                        requestId: requestId, toolCallId: toolCallId,
+                        toolName: toolName, description: desc, kind: kind
+                    )
+                    handlePermissionRequest(request)
+                }
             default:
                 break
             }
+        }
+    }
+
+    private func handlePermissionRequest(_ request: PermissionRequest) {
+        let trust = AppConfig.shared.kiroTrustLevel
+        switch trust {
+        case .all:
+            // Should not receive requests with trust=all (--trust-all-tools), but auto-approve if we do
+            respondPermission(requestId: request.requestId, approved: true)
+        case .safe:
+            let safeKinds: Set<ToolCallKind> = [.read, .glob, .grep, .code]
+            if safeKinds.contains(request.kind) {
+                respondPermission(requestId: request.requestId, approved: true)
+            } else {
+                onPermissionRequest?(request)
+            }
+        case .none:
+            onPermissionRequest?(request)
         }
     }
 }
