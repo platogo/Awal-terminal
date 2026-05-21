@@ -934,7 +934,7 @@ pub extern "C" fn at_surface_get_input_line(surface: *const ATSurface) -> *mut c
 
 // --- ACP Client ---
 
-use crate::acp::client::AcpClient;
+use crate::acp::client::{AcpClient, AcpState};
 use crate::acp::reader::AcpEvent;
 
 /// Opaque handle to an ACP client.
@@ -943,7 +943,8 @@ pub struct ATAcpClient(AcpClient);
 /// C-compatible ACP event.
 /// event_type: 0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall,
 ///             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
-///             8=PermissionRequest, 9=Cancelled
+///             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
+///             11=FsReadRequest, 12=FsWriteRequest
 #[repr(C)]
 pub struct ATAcpEvent {
     pub event_type: u8,
@@ -1038,6 +1039,19 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     )),
                 ),
                 AcpEvent::Cancelled => (9u8, std::ptr::null_mut(), std::ptr::null_mut()),
+                AcpEvent::AuthRequired(msg) => (10, string_to_c(msg), std::ptr::null_mut()),
+                AcpEvent::FsReadRequest { request_id, path } => {
+                    (11, string_to_c(path), string_to_c(&request_id.to_string()))
+                }
+                AcpEvent::FsWriteRequest {
+                    request_id,
+                    path,
+                    content,
+                } => (
+                    12,
+                    string_to_c(content),
+                    string_to_c(&format!("{request_id}\t{path}")),
+                ),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1082,6 +1096,63 @@ pub extern "C" fn at_acp_respond_permission(
 ) -> i32 {
     let client = mut_ref_or!(client, -1);
     match client.0.send_permission_response(request_id, approved) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Respond to a fs/read_text_file request. Pass null content_ptr for error.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_fs_read(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    content_ptr: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    let result = if content_ptr.is_null() {
+        Err("File not found".to_string())
+    } else {
+        let s = unsafe { std::ffi::CStr::from_ptr(content_ptr).to_str().unwrap_or("") };
+        Ok(s.to_string())
+    };
+    match client.0.respond_fs_read(request_id, result) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Respond to a fs/write_text_file request.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_fs_write(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    success: bool,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.respond_fs_write(request_id, success, None) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Get the current ACP state. Returns: 0=Initializing, 1=Ready, 2=Prompting, 3=Dead, 4=Recovering.
+#[no_mangle]
+pub extern "C" fn at_acp_get_state(client: *const ATAcpClient) -> u8 {
+    let client = ref_or!(client, 3);
+    match client.0.state() {
+        AcpState::Initializing => 0,
+        AcpState::Ready => 1,
+        AcpState::Prompting => 2,
+        AcpState::Dead => 3,
+        AcpState::Recovering => 4,
+    }
+}
+
+/// Trigger a manual respawn. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_respawn(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.respawn() {
         Ok(()) => 0,
         Err(_) => -1,
     }

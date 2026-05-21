@@ -38,6 +38,33 @@ pub enum AcpEvent {
     },
     Error(String),
     ProcessExited(Option<i32>),
+    /// Authentication required — message describes what's needed.
+    AuthRequired(String),
+    /// Server requests reading a file.
+    FsReadRequest {
+        request_id: u64,
+        path: String,
+    },
+    /// Server requests writing a file.
+    FsWriteRequest {
+        request_id: u64,
+        path: String,
+        content: String,
+    },
+}
+
+/// Auth-related JSON-RPC error codes.
+const AUTH_ERROR_CODES: &[i64] = &[-32001, -32002];
+
+/// Keywords that indicate an auth failure in error messages.
+const AUTH_KEYWORDS: &[&str] = &["auth", "unauthorized", "login", "credentials"];
+
+fn is_auth_error(code: i64, message: &str) -> bool {
+    if AUTH_ERROR_CODES.contains(&code) {
+        return true;
+    }
+    let lower = message.to_lowercase();
+    AUTH_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }
 
 /// Spawn a reader thread that parses JSON-RPC messages from stdout and sends AcpEvents.
@@ -91,6 +118,24 @@ fn parse_message(
                     kind: params.kind,
                 });
             }
+            "fs/read_text_file" => {
+                let params: serde_json::Value = msg.params?;
+                let path = params.get("path")?.as_str()?.to_string();
+                return Some(AcpEvent::FsReadRequest {
+                    request_id: id,
+                    path,
+                });
+            }
+            "fs/write_text_file" => {
+                let params: serde_json::Value = msg.params?;
+                let path = params.get("path")?.as_str()?.to_string();
+                let content = params.get("content")?.as_str()?.to_string();
+                return Some(AcpEvent::FsWriteRequest {
+                    request_id: id,
+                    path,
+                    content,
+                });
+            }
             _ => return None,
         }
     }
@@ -99,6 +144,10 @@ fn parse_message(
         // This is a response to one of our requests
         let method = pending_methods.lock().ok()?.remove(&id)?;
         if let Some(err) = msg.error {
+            // Check if this is an auth error
+            if is_auth_error(err.code, &err.message) {
+                return Some(AcpEvent::AuthRequired(err.message));
+            }
             return Some(AcpEvent::Error(format!("{}: {}", method, err.message)));
         }
         let result = msg.result?;
@@ -282,5 +331,73 @@ mod tests {
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":4,"result":{}}"#).unwrap();
         let event = parse_message(msg, &pending).unwrap();
         assert!(matches!(event, AcpEvent::Cancelled));
+    }
+
+    #[test]
+    fn parse_auth_error_by_code() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending.lock().unwrap().insert(1, "initialize".to_string());
+
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"session expired"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::AuthRequired(msg) => assert!(msg.contains("session expired")),
+            _ => panic!("expected AuthRequired"),
+        }
+    }
+
+    #[test]
+    fn parse_auth_error_by_keyword() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending.lock().unwrap().insert(1, "session/new".to_string());
+
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Unauthorized: please login"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        assert!(matches!(event, AcpEvent::AuthRequired(_)));
+    }
+
+    #[test]
+    fn parse_fs_read_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":10,"method":"fs/read_text_file","params":{"path":"/tmp/test.txt"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::FsReadRequest { request_id, path } => {
+                assert_eq!(request_id, 10);
+                assert_eq!(path, "/tmp/test.txt");
+            }
+            _ => panic!("expected FsReadRequest"),
+        }
+    }
+
+    #[test]
+    fn parse_fs_write_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":11,"method":"fs/write_text_file","params":{"path":"/tmp/out.txt","content":"hello"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::FsWriteRequest {
+                request_id,
+                path,
+                content,
+            } => {
+                assert_eq!(request_id, 11);
+                assert_eq!(path, "/tmp/out.txt");
+                assert_eq!(content, "hello");
+            }
+            _ => panic!("expected FsWriteRequest"),
+        }
     }
 }

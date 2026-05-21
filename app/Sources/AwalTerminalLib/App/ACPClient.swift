@@ -15,10 +15,21 @@ class ACPClient {
     var onProcessExited: ((Int32?) -> Void)?
     var onPermissionRequest: ((PermissionRequest) -> Void)?
     var onCancelled: (() -> Void)?
+    var onRecovering: (() -> Void)?
+    var onRecoveryFailed: (() -> Void)?
+    var onAuthRequired: ((String) -> Void)?
+    var onFsWriteRequest: ((UInt64, String, String) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
     private(set) var activeToolCalls: [String: ToolCallState] = [:]
+    private(set) var totalCharsReceived: Int = 0
+    private(set) var totalCharsSent: Int = 0
+
+    var estimatedTokens: Int { (totalCharsReceived + totalCharsSent) / 4 }
+
+    /// Maximum events to process per poll tick (16ms) to avoid blocking render.
+    private let maxEventsPerTick = 100
 
     struct PermissionRequest {
         let requestId: UInt64
@@ -35,8 +46,9 @@ class ACPClient {
                     return agent.withCString { agentPtr in
                         at_acp_spawn(kiroPtr, cwdPtr, agentPtr)
                     }
+                } else {
+                    return at_acp_spawn(kiroPtr, cwdPtr, nil)
                 }
-                return at_acp_spawn(kiroPtr, cwdPtr, nil)
             }
         }
         guard let h else { return false }
@@ -69,11 +81,11 @@ class ACPClient {
 
     func sendPrompt(_ text: String) -> Bool {
         guard let handle else { return false }
-        let ok = text.withCString { textPtr in
+        isPrompting = true
+        totalCharsSent += text.count
+        return text.withCString { textPtr in
             at_acp_send_prompt(handle, textPtr) == 0
         }
-        if ok { isPrompting = true }
-        return ok
     }
 
     func cancel() -> Bool {
@@ -89,6 +101,27 @@ class ACPClient {
     func respondPermission(requestId: UInt64, approved: Bool) {
         guard let handle else { return }
         _ = at_acp_respond_permission(handle, requestId, approved)
+    }
+
+    func respondFsRead(requestId: UInt64, content: String?) {
+        guard let handle else { return }
+        if let content {
+            content.withCString { ptr in
+                _ = at_acp_respond_fs_read(handle, requestId, ptr)
+            }
+        } else {
+            _ = at_acp_respond_fs_read(handle, requestId, nil)
+        }
+    }
+
+    func respondFsWrite(requestId: UInt64, success: Bool) {
+        guard let handle else { return }
+        _ = at_acp_respond_fs_write(handle, requestId, success)
+    }
+
+    func respawn() -> Bool {
+        guard let handle else { return false }
+        return at_acp_respawn(handle) == 0
     }
 
     func destroy() {
@@ -118,10 +151,10 @@ class ACPClient {
 
     private func pollEvents() {
         guard let handle else { return }
-        var budget = 100
-        while budget > 0, let event = at_acp_poll_event(handle) {
-            budget -= 1
+        var eventsProcessed = 0
+        while eventsProcessed < maxEventsPerTick, let event = at_acp_poll_event(handle) {
             defer { at_acp_free_event(event) }
+            eventsProcessed += 1
             let type_ = event.pointee.event_type
             let text: String? = event.pointee.text.map { String(cString: $0) }
             let text2: String? = event.pointee.text2.map { String(cString: $0) }
@@ -133,7 +166,10 @@ class ACPClient {
                 if let text { sessionId = text }
                 onSessionReady?()
             case 2: // TextChunk
-                if let text { onTextChunk?(text) }
+                if let text {
+                    totalCharsReceived += text.count
+                    onTextChunk?(text)
+                }
             case 3: // ToolCall
                 if let title = text, let meta = text2 {
                     let parts = meta.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
@@ -170,14 +206,24 @@ class ACPClient {
             case 6: // Error
                 if let text { onError?(text) }
             case 7: // ProcessExited
-                let code = text.flatMap { Int32($0) }
                 isPrompting = false
-                onProcessExited?(code)
-                destroy()
+                // Check state — Rust handles recovery logic
+                let state = at_acp_get_state(handle)
+                if state == 4 { // Recovering
+                    onRecovering?()
+                    // Trigger respawn
+                    if at_acp_respawn(handle) != 0 {
+                        onRecoveryFailed?()
+                    }
+                } else {
+                    // Dead — max retries exhausted
+                    let code = text.flatMap { Int32($0) }
+                    onProcessExited?(code)
+                }
             case 8: // PermissionRequest
                 if let desc = text, let meta = text2 {
                     let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
-                    guard let requestId = parts.first.flatMap({ UInt64($0) }), requestId > 0 else { break }
+                    let requestId = parts.count > 0 ? UInt64(parts[0]) ?? 0 : 0
                     let toolCallId = parts.count > 1 ? String(parts[1]) : ""
                     let toolName = parts.count > 2 ? String(parts[2]) : ""
                     let kindStr = parts.count > 3 ? String(parts[3]) : ""
@@ -191,9 +237,33 @@ class ACPClient {
             case 9: // Cancelled
                 isPrompting = false
                 onCancelled?()
+            case 10: // AuthRequired
+                isPrompting = false
+                onAuthRequired?(text ?? "Authentication required")
+            case 11: // FsReadRequest
+                if let path = text, let meta = text2, let requestId = UInt64(meta) {
+                    handleFsRead(requestId: requestId, path: path)
+                }
+            case 12: // FsWriteRequest
+                if let content = text, let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    guard parts.count > 0, let requestId = UInt64(parts[0]) else {
+                        NSLog("[ACP] FsWriteRequest: failed to parse requestId, skipping")
+                        break
+                    }
+                    let path = parts.count > 1 ? String(parts[1]) : ""
+                    if let handler = onFsWriteRequest {
+                        handler(requestId, path, content)
+                    } else {
+                        // No handler — auto-deny
+                        respondFsWrite(requestId: requestId, success: false)
+                    }
+                }
             default:
                 break
             }
+            // Guard against use-after-free: callbacks above may destroy this client
+            guard self.handle != nil else { return }
         }
     }
 
@@ -201,7 +271,6 @@ class ACPClient {
         let trust = AppConfig.shared.kiroTrustLevel
         switch trust {
         case .all:
-            // Should not receive requests with trust=all (--trust-all-tools), but auto-approve if we do
             respondPermission(requestId: request.requestId, approved: true)
         case .safe:
             let safeKinds: Set<ToolCallKind> = [.read, .glob, .grep, .code]
@@ -212,6 +281,16 @@ class ACPClient {
             }
         case .none:
             onPermissionRequest?(request)
+        }
+    }
+
+    /// Auto-approve file reads — read the file and respond immediately.
+    private func handleFsRead(requestId: UInt64, path: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let content = try? String(contentsOfFile: path, encoding: .utf8)
+            DispatchQueue.main.async {
+                self?.respondFsRead(requestId: requestId, content: content)
+            }
         }
     }
 }
