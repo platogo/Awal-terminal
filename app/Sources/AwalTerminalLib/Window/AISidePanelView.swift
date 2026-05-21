@@ -28,6 +28,10 @@ class AISidePanelView: NSView {
     // Context window bar
     private let contextBarBackground = NSView()
     private let contextBarFill = NSView()
+    private let contextSegmentedBar = ContextSegmentedBarView()
+    private let contextSparkline = ContextSparklineView()
+    private let compactionWarningLabel = NSTextField(labelWithString: "")
+    private var compactionWarningHeight: NSLayoutConstraint?
     private let contextPercentLabel: VoiceClickLabel = {
         let label = VoiceClickLabel(labelWithString: "")
         label.isEditable = false
@@ -198,6 +202,7 @@ class AISidePanelView: NSView {
         configureLabel(tokenUnavailableLabel)
 
         // Context window bar
+        // Context window bar (hidden, kept for layout anchoring)
         contextBarBackground.wantsLayer = true
         contextBarBackground.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
         contextBarBackground.layer?.cornerRadius = 3
@@ -210,6 +215,27 @@ class AISidePanelView: NSView {
         contextBarFill.translatesAutoresizingMaskIntoConstraints = false
         contextBarBackground.addSubview(contextBarFill)
 
+        // Segmented bar (replaces the single-color fill visually)
+        contextSegmentedBar.translatesAutoresizingMaskIntoConstraints = false
+        contextSegmentedBar.toolTip = "Context breakdown: System · Skills · Conversation · Tools"
+        addSubview(contextSegmentedBar)
+
+        // Compaction warning
+        compactionWarningLabel.font = NSFont.monospacedSystemFont(ofSize: 9.0, weight: .bold)
+        compactionWarningLabel.textColor = NSColor(red: 240.0/255.0, green: 100.0/255.0, blue: 70.0/255.0, alpha: 1.0)
+        compactionWarningLabel.stringValue = "⚠ Compaction imminent"
+        compactionWarningLabel.isHidden = true
+        configureLabel(compactionWarningLabel)
+        compactionWarningHeight = compactionWarningLabel.heightAnchor.constraint(equalToConstant: 0)
+        compactionWarningHeight?.isActive = true
+
+        // Sparkline
+        contextSparkline.translatesAutoresizingMaskIntoConstraints = false
+        contextSparkline.wantsLayer = true
+        contextSparkline.layer?.cornerRadius = 2
+        contextSparkline.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.04).cgColor
+        addSubview(contextSparkline)
+
         contextPercentLabel.font = monoFontSmall
         contextPercentLabel.textColor = dimColor
         contextPercentLabel.alignment = .right
@@ -218,9 +244,9 @@ class AISidePanelView: NSView {
         }
         configureLabel(contextPercentLabel)
 
-        // Click gesture on context bar background
+        // Click gesture on segmented bar
         let barClick = NSClickGestureRecognizer(target: self, action: #selector(contextBarClicked(_:)))
-        contextBarBackground.addGestureRecognizer(barClick)
+        contextSegmentedBar.addGestureRecognizer(barClick)
 
         // Activity section
         activitySectionLabel.font = sectionFont
@@ -377,14 +403,31 @@ class AISidePanelView: NSView {
             contextPercentLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
             contextPercentLabel.topAnchor.constraint(equalTo: costLabel.bottomAnchor, constant: 6),
 
-            contextBarBackground.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
-            contextBarBackground.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
-            contextBarBackground.topAnchor.constraint(equalTo: contextPercentLabel.bottomAnchor, constant: 3),
-            contextBarBackground.heightAnchor.constraint(equalToConstant: 6),
+            contextSegmentedBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
+            contextSegmentedBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
+            contextSegmentedBar.topAnchor.constraint(equalTo: contextPercentLabel.bottomAnchor, constant: 3),
+            contextSegmentedBar.heightAnchor.constraint(equalToConstant: 8),
+
+            // Hidden background bar (kept for layout anchoring by activityTopToContextBar)
+            contextBarBackground.leadingAnchor.constraint(equalTo: contextSegmentedBar.leadingAnchor),
+            contextBarBackground.trailingAnchor.constraint(equalTo: contextSegmentedBar.trailingAnchor),
+            contextBarBackground.topAnchor.constraint(equalTo: contextSegmentedBar.topAnchor),
+            contextBarBackground.heightAnchor.constraint(equalToConstant: 8),
 
             contextBarFill.leadingAnchor.constraint(equalTo: contextBarBackground.leadingAnchor),
             contextBarFill.topAnchor.constraint(equalTo: contextBarBackground.topAnchor),
             contextBarFill.bottomAnchor.constraint(equalTo: contextBarBackground.bottomAnchor),
+
+            // Compaction warning
+            compactionWarningLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
+            compactionWarningLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
+            compactionWarningLabel.topAnchor.constraint(equalTo: contextSegmentedBar.bottomAnchor, constant: 3),
+
+            // Sparkline
+            contextSparkline.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
+            contextSparkline.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -margin),
+            contextSparkline.topAnchor.constraint(equalTo: compactionWarningLabel.bottomAnchor, constant: 4),
+            contextSparkline.heightAnchor.constraint(equalToConstant: 24),
 
             // Activity section
             activitySectionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: margin),
@@ -456,7 +499,7 @@ class AISidePanelView: NSView {
         tokenTopToSeparator.isActive = true
 
         // Toggle constraints: activity section top anchors to context bar (tokens visible) or banner/separator (tokens hidden)
-        activityTopToContextBar = activitySectionLabel.topAnchor.constraint(equalTo: contextBarBackground.bottomAnchor, constant: sectionGap)
+        activityTopToContextBar = activitySectionLabel.topAnchor.constraint(equalTo: contextSparkline.bottomAnchor, constant: sectionGap)
         activityTopToBanner = activitySectionLabel.topAnchor.constraint(equalTo: dangerBanner.bottomAnchor, constant: sectionGap)
         activityTopToSeparator = activitySectionLabel.topAnchor.constraint(equalTo: separator1.bottomAnchor, constant: sectionGap)
         activityTopToContextBar.isActive = true
@@ -469,6 +512,10 @@ class AISidePanelView: NSView {
 
         // Hide context bar initially (shown when model has a context window)
         contextBarBackground.isHidden = true
+        contextSegmentedBar.isHidden = true
+        contextSparkline.isHidden = true
+        compactionWarningLabel.isHidden = true
+        compactionWarningHeight?.constant = 0
         contextPercentLabel.isHidden = true
 
         // Update timer
@@ -493,21 +540,25 @@ class AISidePanelView: NSView {
 
     // MARK: - Public API
 
-    /// Whether the current model supports token tracking (Claude only).
-    private var hasTokenTracking: Bool { currentModel == "Claude" }
+    /// Whether the current model supports token tracking (Claude and Kiro).
+    private var hasTokenTracking: Bool { currentModel == "Claude" || currentModel == "Kiro" }
 
     func setModel(_ model: String) {
         currentModel = model
         headerLabel.stringValue = model.isEmpty ? "AI Context" : "\(model) Session"
 
-        let showTokens = (model == "Claude")
+        let showTokens = (model == "Claude" || model == "Kiro")
         tokenSectionLabel.isHidden = !showTokens
         inputTokensLabel.isHidden = !showTokens
         outputTokensLabel.isHidden = !showTokens
         totalTokensLabel.isHidden = !showTokens
         costLabel.isHidden = !showTokens
         contextPercentLabel.isHidden = !showTokens
-        contextBarBackground.isHidden = !showTokens
+        contextBarBackground.isHidden = true // always hidden; segmented bar replaces it
+        contextSegmentedBar.isHidden = !showTokens
+        contextSparkline.isHidden = !showTokens
+        compactionWarningLabel.isHidden = true
+        compactionWarningHeight?.constant = 0
         tokenUnavailableLabel.isHidden = true
 
         // Toggle token section top constraints (only relevant when tokens visible)
@@ -618,18 +669,24 @@ class AISidePanelView: NSView {
         guard let model = ModelCatalog.find(currentModel),
               model.contextWindow > 0 else {
             contextBarBackground.isHidden = true
+            contextSegmentedBar.isHidden = true
+            contextSparkline.isHidden = true
+            compactionWarningLabel.isHidden = true
+            compactionWarningHeight?.constant = 0
             contextPercentLabel.isHidden = true
             return
         }
 
-        contextBarBackground.isHidden = false
+        contextBarBackground.isHidden = true // hidden; segmented bar replaces it
+        contextSegmentedBar.isHidden = false
+        contextSparkline.isHidden = false
         contextPercentLabel.isHidden = false
 
         let fraction = min(Double(inputTokens) / Double(model.contextWindow), 1.0)
         let percent = Int(fraction * 100)
-        contextPercentLabel.stringValue = "  Context: \(percent)%"
+        contextPercentLabel.stringValue = "  Context: \(percent)% (\(formatTokenCount(inputTokens)) / \(formatTokenCount(model.contextWindow))"
 
-        // Color coding
+        // Color coding for percent label
         let barColor: NSColor
         if fraction < 0.5 {
             barColor = NSColor(red: 80.0/255.0, green: 200.0/255.0, blue: 120.0/255.0, alpha: 1.0)
@@ -638,10 +695,40 @@ class AISidePanelView: NSView {
         } else {
             barColor = NSColor(red: 240.0/255.0, green: 100.0/255.0, blue: 70.0/255.0, alpha: 1.0)
         }
-        contextBarFill.layer?.backgroundColor = barColor.cgColor
         contextPercentLabel.textColor = barColor
 
-        // Update fill width using proportional constraint
+        // Compaction warning at 80%
+        let isWarning = fraction >= 0.8
+        compactionWarningLabel.isHidden = !isWarning
+        compactionWarningHeight?.constant = isWarning ? compactionWarningLabel.intrinsicContentSize.height : 0
+        contextSegmentedBar.isWarning = isWarning
+
+        // Update segmented bar with breakdown
+        let breakdown = tokenTracker.contextBreakdown
+        let ctxWindow = Double(model.contextWindow)
+        if breakdown.total > 0 && ctxWindow > 0 {
+            contextSegmentedBar.segments = [
+                .init(fraction: CGFloat(Double(breakdown.systemPrompt) / ctxWindow),
+                      color: ContextSegmentedBarView.systemColor, label: "System"),
+                .init(fraction: CGFloat(Double(breakdown.skills) / ctxWindow),
+                      color: ContextSegmentedBarView.skillsColor, label: "Skills"),
+                .init(fraction: CGFloat(Double(breakdown.conversation) / ctxWindow),
+                      color: ContextSegmentedBarView.conversationColor, label: "Conversation"),
+                .init(fraction: CGFloat(Double(breakdown.toolResults) / ctxWindow),
+                      color: ContextSegmentedBarView.toolResultsColor, label: "Tools"),
+            ]
+        } else {
+            // Fallback: single segment
+            contextSegmentedBar.segments = [
+                .init(fraction: CGFloat(fraction),
+                      color: barColor, label: "Context"),
+            ]
+        }
+
+        // Update sparkline
+        contextSparkline.dataPoints = tokenTracker.sparklineHistory
+
+        // Update fill width (kept for backward compat with activityTopToContextBar)
         contextBarFillWidth?.isActive = false
         if fraction > 0 {
             contextBarFillWidth = contextBarFill.widthAnchor.constraint(
