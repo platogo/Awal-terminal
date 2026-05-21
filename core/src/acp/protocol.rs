@@ -93,6 +93,19 @@ pub struct SessionNewResult {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionCancelParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionResumeParams {
+    pub session_id: String,
+    pub cwd: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionPromptParams {
     pub session_id: String,
     pub prompt: Vec<ContentBlock>,
