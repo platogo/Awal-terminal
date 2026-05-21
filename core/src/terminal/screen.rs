@@ -1022,7 +1022,13 @@ impl Screen {
 
     /// Search scrollback + screen for a query string. Returns (col, absolute_row) pairs.
     /// Absolute row: negative = scrollback, 0+ = screen row.
+    /// Capped at 10,000 results.
     pub fn search(&self, query: &str) -> Vec<(usize, i64)> {
+        self.search_with_limit(query, 10_000)
+    }
+
+    /// Search with a custom result cap.
+    pub fn search_with_limit(&self, query: &str, max_results: usize) -> Vec<(usize, i64)> {
         if query.is_empty() {
             return Vec::new();
         }
@@ -1033,16 +1039,37 @@ impl Screen {
         for (sb_idx, line) in self.scrollback.iter().enumerate() {
             let line_chars: Vec<char> = line.iter().map(|c| c.ch).collect();
             let abs_row = sb_idx as i64 - self.scrollback.len() as i64;
-            Self::find_char_matches(&line_chars, &query_chars, abs_row, &mut results);
+            Self::find_char_matches(
+                &line_chars,
+                &query_chars,
+                abs_row,
+                max_results,
+                &mut results,
+            );
+            if results.len() >= max_results {
+                break;
+            }
         }
 
         // Search active grid
-        let grid = self.active_grid();
-        for row in 0..grid.rows {
-            let line_chars: Vec<char> = grid.cells[row].iter().map(|c| c.ch).collect();
-            Self::find_char_matches(&line_chars, &query_chars, row as i64, &mut results);
+        if results.len() < max_results {
+            let grid = self.active_grid();
+            for row in 0..grid.rows {
+                let line_chars: Vec<char> = grid.cells[row].iter().map(|c| c.ch).collect();
+                Self::find_char_matches(
+                    &line_chars,
+                    &query_chars,
+                    row as i64,
+                    max_results,
+                    &mut results,
+                );
+                if results.len() >= max_results {
+                    break;
+                }
+            }
         }
 
+        results.truncate(max_results);
         results
     }
 
@@ -1051,6 +1078,7 @@ impl Screen {
         line_chars: &[char],
         query_chars: &[char],
         abs_row: i64,
+        max_results: usize,
         results: &mut Vec<(usize, i64)>,
     ) {
         let qlen = query_chars.len();
@@ -1072,6 +1100,9 @@ impl Screen {
                 }
             }
             results.push((col, abs_row));
+            if results.len() >= max_results {
+                return;
+            }
         }
     }
 
@@ -1385,5 +1416,26 @@ mod tests {
             screen.scrollback_hyperlinks.is_empty(),
             "URLs longer than 2048 should be rejected"
         );
+    }
+
+    #[test]
+    fn test_search_early_termination() {
+        // Fill screen with a repeating character so every column matches
+        let cols = 80;
+        let rows = 5;
+        let mut screen = Screen::new(cols, rows);
+        for row in 0..rows {
+            for _ in 0..cols {
+                screen.write_char('a');
+            }
+            if row < rows - 1 {
+                screen.newline();
+                screen.carriage_return();
+            }
+        }
+
+        let limit = 10;
+        let results = screen.search_with_limit("a", limit);
+        assert_eq!(results.len(), limit, "results should be capped at limit");
     }
 }
