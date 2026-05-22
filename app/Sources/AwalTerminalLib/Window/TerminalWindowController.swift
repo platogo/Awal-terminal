@@ -1625,6 +1625,14 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.reloadTabBar()
         }
 
+        terminal.onACPLaunchRequested = { [weak self, weak tab] model, workingDir in
+            guard let self, let tab else { return }
+            let config = AppConfig.shared
+            let kiroPath = config.kiroBinaryPath ?? "kiro-cli"
+            let cwd = workingDir ?? tab.statusBar.currentPath ?? FileManager.default.currentDirectoryPath
+            self.startACPSession(kiroPath: kiroPath, cwd: cwd)
+        }
+
         // Show AWAKE badge if sleep prevention is already active globally
         let globallyAwake = TerminalWindowTracker.shared.allControllers.contains { c in
             c.tabs.contains { $0.isSleepPrevented }
@@ -2363,7 +2371,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let terminal = tab.splitContainer.focusedTerminal
         guard let model = ModelCatalog.find("Kiro") else { return }
         let dir = tab.statusBar.currentPath
-        terminal.launchSessionDirect(model: model, workingDir: dir)
+        terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
@@ -2374,6 +2382,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 inputChars: tab.acpClient?.totalCharsSent ?? 0,
                 outputChars: tab.acpClient?.totalCharsReceived ?? 0
             )
+            tab.aiSidePanel.updateTokenDisplay(
+                input: tab.tokenTracker.currentInput,
+                output: tab.tokenTracker.totalOutput
+            )
         }
         client.onError = { [weak self] msg in
             self?.flashStatusBar("ACP Error: \(msg)")
@@ -2383,6 +2395,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.toolCallStack?.clearAll()
             self.flashStatusBar("ACP: Turn complete")
             tab.tokenTracker.incrementTurns()
+            tab.aiSidePanel.updateTokenDisplay(
+                input: tab.tokenTracker.currentInput,
+                output: tab.tokenTracker.totalOutput
+            )
             tab.aiSidePanel.setRewindVisible(true)
             // Save session metadata
             if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath {

@@ -634,6 +634,13 @@ extension TerminalView {
             }
         }
 
+        // Route to ACP mode if the model prefers it
+        if model.prefersACP, commandOverride == nil, let callback = onACPLaunchRequested {
+            callback(model, workingDir)
+            onSessionChanged?(model.name, model.provider, Int(termCols), Int(termRows))
+            return
+        }
+
         // Build the full command to execute
         var modelCmd = commandOverride ?? model.command
         if commandOverride == nil, !modelCmd.isEmpty, let bin = model.binaryName, let install = model.installCommand {
