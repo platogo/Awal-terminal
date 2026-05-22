@@ -146,6 +146,7 @@ class TerminalView: NSView {
     private var isSuspendedForSleep: Bool = false
     var isWaitingForOutput: Bool = false
     var isLoadingResumeSessions: Bool = false
+    var isRedactMode: Bool = false
     var loadingPhase: Float = 0
     var lastLoadingRenderTime: CFTimeInterval = 0
     var loadingSpinnerRow: Int = 0
@@ -652,6 +653,11 @@ class TerminalView: NSView {
             _ = at_surface_read_cells(s, ptr.baseAddress!, UInt32(needed))
         }
 
+        // Redact mode: mask secrets in rendered cells
+        if isRedactMode {
+            applyRedaction()
+        }
+
         // Update fold regions from AI analyzer
         updateFoldRegions()
 
@@ -662,6 +668,28 @@ class TerminalView: NSView {
         cursorRow = row
         cursorCol = col
         cursorVisible = visible
+    }
+
+    private func applyRedaction() {
+        let cols = Int(termCols)
+        let rows = Int(termRows)
+        let patterns = AppConfig.shared.redactPatterns
+
+        for row in 0..<rows {
+            let rowStart = row * cols
+            var rowText = ""
+            rowText.reserveCapacity(cols)
+            for col in 0..<cols {
+                let cp = cellBuffer[rowStart + col].codepoint
+                rowText.append(cp > 0 ? Character(Unicode.Scalar(cp)!) : " ")
+            }
+            let ranges = StealthRedactor.redactedRanges(in: rowText, patterns: patterns)
+            for range in ranges {
+                for col in range.location..<min(range.location + range.length, cols) {
+                    cellBuffer[rowStart + col].codepoint = 0x2A // '*'
+                }
+            }
+        }
     }
 
     func updateFoldRegions() {

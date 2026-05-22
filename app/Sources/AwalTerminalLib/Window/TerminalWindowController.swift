@@ -1974,6 +1974,17 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         switchToTab(at: tabs.count - 1)
     }
 
+    // MARK: - Redact Mode
+
+    @objc func toggleRedactMode(_ sender: Any?) {
+        let tab = activeTab
+        let terminal = tab.splitContainer.focusedTerminal
+        terminal.isRedactMode.toggle()
+        tab.statusBar.setRedact(terminal.isRedactMode)
+        terminal.updateCellBuffer()
+        terminal.needsRender = true
+    }
+
     // MARK: - AI Side Panel
 
     #if DEBUG

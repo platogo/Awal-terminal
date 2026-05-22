@@ -805,6 +805,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         stealthItem.target = self
         toolsMenu.addItem(stealthItem)
 
+        let redactItem = NSMenuItem(title: "Redact Secrets", action: #selector(TerminalWindowController.toggleRedactMode(_:)), keyEquivalent: "h")
+        redactItem.keyEquivalentModifierMask = [.command, .shift]
+        toolsMenu.addItem(redactItem)
+
         toolsMenu.addItem(NSMenuItem.separator())
 
         let agentMenuItem = NSMenuItem(title: "Kiro Agent", action: nil, keyEquivalent: "")

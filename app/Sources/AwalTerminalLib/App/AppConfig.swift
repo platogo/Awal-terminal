@@ -122,6 +122,10 @@ struct AppConfig {
     // Sleep prevention (keep display awake during terminal activity)
     var preventSleep: Bool = false
 
+    // Redact mode (hide secrets in rendered output)
+    var redactMode: Bool = false
+    var redactPatterns: [NSRegularExpression] = AppConfig.defaultRedactPatterns
+
     // AI Components Export
     var aiComponentsExportEnabled: Bool = false
     var aiComponentsExportFormats: [String] = []
@@ -268,6 +272,15 @@ struct AppConfig {
 
         // Sleep prevention
         if let v = parsed["system.prevent_sleep"] { config.preventSleep = v == "true" }
+
+        // Redact mode
+        if let v = parsed["redact.enabled"] { config.redactMode = v == "true" }
+        if let v = parsed["redact.patterns"] {
+            let custom = v.split(separator: ",").compactMap { pat -> NSRegularExpression? in
+                try? NSRegularExpression(pattern: pat.trimmingCharacters(in: .whitespaces), options: [])
+            }
+            if !custom.isEmpty { config.redactPatterns = custom }
+        }
 
         // AI Components
         if let v = parsed["ai_components.enabled"] { config.aiComponentsEnabled = v == "true" }
@@ -458,6 +471,18 @@ struct AppConfig {
         let b = CGFloat(val & 0xFF) / 255.0
         return NSColor(red: r, green: g, blue: b, alpha: 1.0)
     }
+
+    // MARK: - Default Redact Patterns
+
+    private static let defaultRedactPatterns: [NSRegularExpression] = {
+        let patterns = [
+            "AKIA[0-9A-Z]{16}",
+            "gh[pousr]_[A-Za-z0-9_]{36,}",
+            "(?i)bearer\\s+[A-Za-z0-9\\-._~+/]+=*",
+            "(?i)(?:password|secret|token|api_key|apikey)\\s*[:=]\\s*\\S+",
+        ]
+        return patterns.compactMap { try? NSRegularExpression(pattern: $0, options: []) }
+    }()
 
     // MARK: - Default ANSI Colors
 
