@@ -2443,6 +2443,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         client.onTurnEnd = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
+            if let credits = tab.acpClient?.lastTurnCredits, credits > 0 {
+                tab.tokenTracker.addCredits(credits)
+            }
             if tab.subagentTracker.activeCount == 0 {
                 self.toolCallStack?.clearAll()
             }

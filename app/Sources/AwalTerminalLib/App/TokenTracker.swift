@@ -28,6 +28,7 @@ class TokenTracker {
     private(set) var toolCalls: [String] = []
     private(set) var modelUsed: String = ""
     private(set) var sessionId: String = ""
+    private(set) var creditsUsed: Double = 0.0
 
     /// Context breakdown by category (estimated).
     private(set) var contextBreakdown: ContextBreakdown = ContextBreakdown()
@@ -43,6 +44,12 @@ class TokenTracker {
     private var sessionStart: Date = Date()
 
     init() {}
+
+    func addCredits(_ amount: Double) {
+        lock.lock()
+        creditsUsed += amount
+        lock.unlock()
+    }
 
     // MARK: - Shared Pricing
 
@@ -68,6 +75,9 @@ class TokenTracker {
     }
 
     var estimatedCost: Double {
+        if modelUsed == "Kiro" && creditsUsed > 0 {
+            return creditsUsed * AppConfig.shared.kiroCreditCostUSD
+        }
         Self.estimateCost(model: modelUsed, inputFull: cumulativeInputFull, cacheRead: cumulativeCacheRead, output: totalOutput)
     }
 
@@ -283,6 +293,9 @@ class TokenTracker {
     }
 
     var displayString: String {
+        if modelUsed == "Kiro" && creditsUsed > 0 {
+            return String(format: "%.2f cr • $%.3f", creditsUsed, creditsUsed * AppConfig.shared.kiroCreditCostUSD)
+        }
         guard currentInput > 0 || totalOutput > 0 else { return "" }
         return "\(formatTokenCount(currentInput)) ctx · \(formatTokenCount(totalOutput)) out"
     }
@@ -297,6 +310,7 @@ class TokenTracker {
         toolCalls = []
         modelUsed = ""
         sessionId = ""
+        creditsUsed = 0.0
         lastFile = ""
         lastFileSize = 0
         sessionStart = Date()

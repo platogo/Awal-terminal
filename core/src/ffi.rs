@@ -1029,8 +1029,15 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     string_to_c(content.as_deref().unwrap_or("")),
                     string_to_c(&format!("{id}\t{status}")),
                 ),
-                AcpEvent::TurnEnd { stop_reason } => {
-                    (5, std::ptr::null_mut(), string_to_c(stop_reason))
+                AcpEvent::TurnEnd {
+                    stop_reason,
+                    credits_used,
+                } => {
+                    let text2_val = match credits_used {
+                        Some(c) => format!("{stop_reason}\t{c}"),
+                        None => stop_reason.clone(),
+                    };
+                    (5, std::ptr::null_mut(), string_to_c(&text2_val))
                 }
                 AcpEvent::Error(msg) => (6, string_to_c(msg), std::ptr::null_mut()),
                 AcpEvent::ProcessExited(code) => (

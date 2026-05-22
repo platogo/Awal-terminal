@@ -631,6 +631,7 @@ class StatusBarView: NSView, NSMenuDelegate {
         // Get cwd of the shell process via /proc or lsof
         let pid = shellPid
         let isClaudeSession = currentModelName == "Claude"
+        let isKiroSession = currentModelName == "Kiro"
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let fgPid = self?.findForegroundProcess(pid) ?? pid
             // Get cwd from procfs (macOS: use proc_pidinfo or lsof)
@@ -643,7 +644,7 @@ class StatusBarView: NSView, NSMenuDelegate {
             if isClaudeSession {
                 tracker.update(projectPath: cwd.isEmpty ? nil : cwd)
             }
-            let tokenDisplay = isClaudeSession ? tracker.displayString : ""
+            let tokenDisplay = (isClaudeSession || isKiroSession) ? tracker.displayString : ""
 
             DispatchQueue.main.async {
                 let oldPath = self?.currentPath

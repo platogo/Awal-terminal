@@ -119,6 +119,7 @@ struct AppConfig {
     var kiroPermissionTimeout: Int = 60
     var kiroAgentEngine: String?
     var kiroTrustedTools: [String] = []
+    var kiroCreditCostUSD: Double = 0.04
 
     // Sleep prevention (keep display awake during terminal activity)
     var preventSleep: Bool = false
@@ -271,6 +272,7 @@ struct AppConfig {
                 : stripped
             config.kiroTrustedTools = normalized.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         }
+        if let v = parsed["kiro.credit_cost_usd"], let d = Double(v) { config.kiroCreditCostUSD = d }
 
         // Sleep prevention
         if let v = parsed["system.prevent_sleep"] { config.preventSleep = v == "true" }

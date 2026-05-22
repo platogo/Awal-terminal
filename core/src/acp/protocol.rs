@@ -136,6 +136,11 @@ pub struct ContentBlock {
 #[serde(rename_all = "camelCase")]
 pub struct SessionPromptResult {
     pub stop_reason: Option<String>,
+    #[serde(default, alias = "credits")]
+    pub credits_used: Option<f64>,
+    /// Catch-all for unknown fields (temporary, for discovery).
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, Value>,
 }
 
 #[derive(Deserialize)]

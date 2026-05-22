@@ -684,13 +684,11 @@ class AISidePanelView: NSView {
         }
 
         // Calculate cost using cumulative breakdown (full-rate vs cache-rate)
-        let cost = TokenTracker.estimateCost(
-            model: currentModel,
-            inputFull: tracker.cumulativeInputFull,
-            cacheRead: tracker.cumulativeCacheRead,
-            output: tracker.totalOutput
-        )
-        if cost > 0 {
+        let cost = tracker.estimatedCost
+        if currentModel == "Kiro" && tracker.creditsUsed > 0 {
+            costLabel.stringValue = String(format: "  Credits: %.2f ($%.4f)", tracker.creditsUsed, cost)
+            costLabel.textColor = NSColor(white: 0.7, alpha: 1.0)
+        } else if cost > 0 {
             costLabel.stringValue = "  Cost:   $\(String(format: "%.4f", cost))"
             costLabel.textColor = cost > 1.0
                 ? NSColor(red: 1.0, green: 0.6, blue: 0.3, alpha: 1.0)
