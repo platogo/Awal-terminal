@@ -106,6 +106,12 @@ pub struct SessionCancelSubagentParams {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionRewindParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionResumeParams {
     pub session_id: String,
     pub cwd: String,
@@ -306,5 +312,15 @@ mod tests {
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32600);
         assert_eq!(err.message, "Invalid request");
+    }
+
+    #[test]
+    fn serialize_session_rewind_params() {
+        let params = SessionRewindParams {
+            session_id: "sess-123".to_string(),
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["sessionId"], "sess-123");
+        assert_eq!(json.as_object().unwrap().len(), 1);
     }
 }

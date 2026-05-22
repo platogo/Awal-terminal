@@ -467,7 +467,9 @@ char *at_surface_get_input_line(const struct ATSurface *surface);
  */
 struct ATAcpClient *at_acp_spawn(const char *kiro_path,
                                  const char *cwd,
-                                 const char *agent);
+                                 const char *agent,
+                                 const char *engine,
+                                 const char *trust_tools);
 
 /**
  * Poll next event. Returns null if no event available.
@@ -491,6 +493,11 @@ int32_t at_acp_cancel(struct ATAcpClient *client);
  */
 int32_t at_acp_cancel_subagent(struct ATAcpClient *client,
                                const char *subagent_id);
+
+/**
+ * Rewind session to previous turn. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_send_rewind(struct ATAcpClient *client);
 
 /**
  * Respond to a permission request. Returns 0 on success, -1 on error.
@@ -538,7 +545,9 @@ char *at_acp_get_session_id(const struct ATAcpClient *client);
  */
 struct ATAcpClient *at_acp_spawn_resume(const char *kiro_path,
                                         const char *cwd,
-                                        const char *session_id);
+                                        const char *session_id,
+                                        const char *engine,
+                                        const char *trust_tools);
 
 /**
  * Force-kill the ACP child process (hard termination, no graceful cancel).

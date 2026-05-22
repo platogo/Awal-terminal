@@ -43,15 +43,29 @@ class ACPClient {
         let kind: ToolCallKind
     }
 
-    func spawn(kiroPath: String, cwd: String, agent: String? = nil) -> Bool {
+    func spawn(kiroPath: String, cwd: String, agent: String? = nil, engine: String? = nil, trustTools: String? = nil) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
             cwd.withCString { cwdPtr in
-                if let agent {
-                    return agent.withCString { agentPtr in
-                        at_acp_spawn(kiroPtr, cwdPtr, agentPtr)
-                    }
-                } else {
-                    return at_acp_spawn(kiroPtr, cwdPtr, nil)
+                let call = { (aPtr: UnsafePointer<CChar>?, ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
+                    at_acp_spawn(kiroPtr, cwdPtr, aPtr, ePtr, tPtr)
+                }
+                switch (agent, engine, trustTools) {
+                case let (a?, e?, t?):
+                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in call(aP, eP, tP) } } }
+                case let (a?, e?, nil):
+                    return a.withCString { aP in e.withCString { eP in call(aP, eP, nil) } }
+                case let (a?, nil, t?):
+                    return a.withCString { aP in t.withCString { tP in call(aP, nil, tP) } }
+                case let (nil, e?, t?):
+                    return e.withCString { eP in t.withCString { tP in call(nil, eP, tP) } }
+                case let (a?, nil, nil):
+                    return a.withCString { aP in call(aP, nil, nil) }
+                case let (nil, e?, nil):
+                    return e.withCString { eP in call(nil, eP, nil) }
+                case let (nil, nil, t?):
+                    return t.withCString { tP in call(nil, nil, tP) }
+                case (nil, nil, nil):
+                    return call(nil, nil, nil)
                 }
             }
         }
@@ -61,11 +75,23 @@ class ACPClient {
         return true
     }
 
-    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String) -> Bool {
+    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String, engine: String? = nil, trustTools: String? = nil) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
             cwd.withCString { cwdPtr in
                 sessionId.withCString { sidPtr in
-                    at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr)
+                    let call = { (ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
+                        at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr, ePtr, tPtr)
+                    }
+                    switch (engine, trustTools) {
+                    case let (e?, t?):
+                        return e.withCString { eP in t.withCString { tP in call(eP, tP) } }
+                    case let (e?, nil):
+                        return e.withCString { eP in call(eP, nil) }
+                    case let (nil, t?):
+                        return t.withCString { tP in call(nil, tP) }
+                    case (nil, nil):
+                        return call(nil, nil)
+                    }
                 }
             }
         }
@@ -102,6 +128,11 @@ class ACPClient {
         return id.withCString { idPtr in
             at_acp_cancel_subagent(handle, idPtr) == 0
         }
+    }
+
+    func sendRewind() -> Bool {
+        guard let handle else { return false }
+        return at_acp_send_rewind(handle) == 0
     }
 
     func forceKill() {
