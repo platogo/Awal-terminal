@@ -658,10 +658,10 @@ extension TerminalView {
                 modelCmd += " --agent \(agent.shellEscaped)"
             }
             // Route to ACP if available
-            if commandOverride == nil, let dir = workingDir {
+            if commandOverride == nil, let dir = workingDir, let callback = onACPLaunchRequested {
                 isWaitingForOutput = false
                 loadingMessageText = ""
-                onACPLaunchRequested?(model, dir)
+                callback(model, dir)
                 return
             }
         }

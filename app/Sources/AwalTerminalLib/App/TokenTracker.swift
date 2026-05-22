@@ -78,7 +78,7 @@ class TokenTracker {
         if modelUsed == "Kiro" && creditsUsed > 0 {
             return creditsUsed * AppConfig.shared.kiroCreditCostUSD
         }
-        Self.estimateCost(model: modelUsed, inputFull: cumulativeInputFull, cacheRead: cumulativeCacheRead, output: totalOutput)
+        return Self.estimateCost(model: modelUsed, inputFull: cumulativeInputFull, cacheRead: cumulativeCacheRead, output: totalOutput)
     }
 
     /// Find the Claude projects directory for a given working path.

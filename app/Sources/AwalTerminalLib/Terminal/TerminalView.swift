@@ -681,7 +681,11 @@ class TerminalView: NSView {
             rowText.reserveCapacity(cols)
             for col in 0..<cols {
                 let cp = cellBuffer[rowStart + col].codepoint
-                rowText.append(cp > 0 ? Character(Unicode.Scalar(cp)!) : " ")
+                if cp > 0, let scalar = Unicode.Scalar(cp) {
+                    rowText.append(Character(scalar))
+                } else {
+                    rowText.append(" ")
+                }
             }
             let ranges = StealthRedactor.redactedRanges(in: rowText, patterns: patterns)
             for range in ranges {

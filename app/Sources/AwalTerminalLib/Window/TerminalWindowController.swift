@@ -335,6 +335,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         wireSplitContainer(splitContainer, tab: tab)
         wireStatusBar(statusBar, tab: tab)
 
+        rootTerminal.isRedactMode = AppConfig.shared.redactMode
+
         return tab
     }
 
@@ -1732,7 +1734,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.screenshotToSession(nil)
         }
         tab.aiSidePanel.onResumeSession = { [weak self, weak tab] sessionId in
-            guard let self, let tab, let cwd = tab.statusBar.currentPath else { return }
+            guard let self, let tab, let cwd = tab.statusBar.currentPath ?? tab.acpProjectPath else { return }
             let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
             self.resumeACPSession(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId)
         }
@@ -2421,8 +2423,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         // Launch Kiro in PTY mode via the terminal view
         let terminal = tab.splitContainer.focusedTerminal
         guard let model = ModelCatalog.find("Kiro") else { return }
-        let dir = tab.statusBar.currentPath
-        terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
+        let dir = tab.statusBar.currentPath ?? tab.acpProjectPath
+        terminal.launchSessionDirect(model: model, workingDir: dir)
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
@@ -2457,7 +2459,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             )
             tab.aiSidePanel.setRewindVisible(true)
             // Save session metadata
-            if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath {
+            if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath ?? tab.acpProjectPath {
                 let info = SessionManager.SessionInfo(
                     id: sid, model: "Kiro", projectPath: cwd,
                     startedAt: tab.sessionStartTime ?? Date(),
@@ -2552,10 +2554,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
             // Update pipeline group progress
             if let self, let gid = tab.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
-                group.completedStages = self.tabs
-                    .filter { $0.groupID == gid }
-                    .filter { !$0.subagentTracker.orderedSubagents.contains(where: { $0.isActive }) }
-                    .count
+                group.completedStages = tab.subagentTracker.subagents.values.filter { !$0.isActive }.count
                 if group.autoCloseOnComplete && group.completedStages >= group.totalStages && group.totalStages > 0 {
                     self.closePipelineGroup(group)
                 }
