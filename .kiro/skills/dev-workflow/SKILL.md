@@ -41,6 +41,9 @@ Swift tests (`just test-swift`) require full Xcode.app installed. If unavailable
 
 ## PR Conventions
 
+- Target repo: `platogo/Awal-terminal` (origin). NEVER create PRs against upstream.
+  This is enforced via `gh repo set-default` (stored in `.gh-resolved`).
+
 - Target branch: `main`
 - Title: concise, under 70 chars, imperative mood
 - Description: summary of changes + what was tested

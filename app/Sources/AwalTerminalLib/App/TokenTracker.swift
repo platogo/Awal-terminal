@@ -56,6 +56,7 @@ class TokenTracker {
         "Claude": ModelPricing(inputPerM: 3.0, outputPerM: 15.0, cacheReadPerM: 0.30),
         "Gemini": ModelPricing(inputPerM: 1.25, outputPerM: 5.0, cacheReadPerM: 0.315),
         "Codex": ModelPricing(inputPerM: 2.50, outputPerM: 10.0, cacheReadPerM: 0.0),
+        "Kiro": ModelPricing(inputPerM: 10.0, outputPerM: 10.0, cacheReadPerM: 0.0), // TODO: placeholder pricing — Kiro uses credits, not per-token billing
     ]
 
     static func estimateCost(model: String, inputFull: Int, cacheRead: Int, output: Int) -> Double {

@@ -569,10 +569,11 @@ class AISidePanelView: NSView {
         headerLabel.stringValue = model.isEmpty ? "AI Context" : "\(model) Session"
 
         let showTokens = (model == "Claude" || model == "Kiro")
+        tokenSectionLabel.stringValue = (model == "Kiro") ? "Credits" : "Tokens"
         tokenSectionLabel.isHidden = !showTokens
         inputTokensLabel.isHidden = !showTokens
-        outputTokensLabel.isHidden = !showTokens
-        totalTokensLabel.isHidden = !showTokens
+        outputTokensLabel.isHidden = !showTokens || model == "Kiro"
+        totalTokensLabel.isHidden = !showTokens || model == "Kiro"
         costLabel.isHidden = !showTokens
         contextPercentLabel.isHidden = !showTokens
         contextBarBackground.isHidden = true // always hidden; segmented bar replaces it
@@ -667,12 +668,19 @@ class AISidePanelView: NSView {
     func updateTokenDisplay(input: Int, output: Int) {
         guard hasTokenTracking else { return }
 
-        // input = current context usage (last turn's input tokens)
-        // output = cumulative output tokens
-        inputTokensLabel.stringValue = "  Input:  \(formatTokenCount(input))"
-        outputTokensLabel.stringValue = "  Output: \(formatTokenCount(output))"
-        let total = input + output
-        totalTokensLabel.stringValue = "  Total:  \(formatTokenCount(total))"
+        if currentModel == "Kiro" {
+            let credits = Double(input + output) / 1000.0
+            inputTokensLabel.stringValue = "  Credits: \(String(format: "%.1f", credits))"
+            outputTokensLabel.isHidden = true
+            totalTokensLabel.isHidden = true
+        } else {
+            outputTokensLabel.isHidden = false
+            totalTokensLabel.isHidden = false
+            inputTokensLabel.stringValue = "  Input:  \(formatTokenCount(input))"
+            outputTokensLabel.stringValue = "  Output: \(formatTokenCount(output))"
+            let total = input + output
+            totalTokensLabel.stringValue = "  Total:  \(formatTokenCount(total))"
+        }
 
         // Calculate cost using cumulative breakdown (full-rate vs cache-rate)
         let tracker = self.tokenTracker

@@ -21,6 +21,8 @@ struct LLMModel {
     let dangerFlag: String?
     /// CLI flag to enable remote control. Nil if model doesn't support it.
     let remoteControlFlag: String?
+    /// Whether this model prefers ACP mode over PTY.
+    let prefersACP: Bool
 
     var hasConfig: Bool { configPath != nil }
     var storageKey: String { name.lowercased() }
@@ -43,11 +45,11 @@ struct LLMModel {
 
 enum ModelCatalog {
     static let all: [LLMModel] = [
-        LLMModel(name: "Claude",   provider: "Anthropic",       command: "claude",              configPath: "~/.claude/settings.json",       installCommand: "npm install -g @anthropic-ai/claude-code",  contextWindow: 200_000, resumeCommand: "claude --resume",  injectionStrategy: .claudePlugin,       dangerFlag: "--dangerously-skip-permissions", remoteControlFlag: "--remote-control"),
-        LLMModel(name: "Gemini",   provider: "Google",          command: "gemini",              configPath: "~/.config/gemini/settings.json", installCommand: "npm install -g @google/gemini-cli",        contextWindow: 1_000_000, resumeCommand: "gemini --resume", injectionStrategy: .systemInstruction, dangerFlag: "--yolo", remoteControlFlag: nil),
-        LLMModel(name: "Codex",    provider: "OpenAI",          command: "codex",               configPath: nil,                             installCommand: "npm install -g @openai/codex",             contextWindow: 200_000, resumeCommand: "codex resume",     injectionStrategy: .instructionsFlag,   dangerFlag: "--full-auto", remoteControlFlag: nil),
-        LLMModel(name: "Kiro",     provider: "Amazon",          command: "kiro-cli chat",       configPath: nil,                             installCommand: "curl -fsSL https://kiro.dev/install | bash", contextWindow: 200_000, resumeCommand: "kiro-cli chat --resume", injectionStrategy: .none, dangerFlag: "--trust-all-tools", remoteControlFlag: nil),
-        LLMModel(name: "Shell",    provider: "Terminal",         command: "",                    configPath: nil,                             installCommand: nil,                                        contextWindow: 0, resumeCommand: nil,                      injectionStrategy: .none,               dangerFlag: nil, remoteControlFlag: nil),
+        LLMModel(name: "Claude",   provider: "Anthropic",       command: "claude",              configPath: "~/.claude/settings.json",       installCommand: "npm install -g @anthropic-ai/claude-code",  contextWindow: 200_000, resumeCommand: "claude --resume",  injectionStrategy: .claudePlugin,       dangerFlag: "--dangerously-skip-permissions", remoteControlFlag: "--remote-control", prefersACP: false),
+        LLMModel(name: "Gemini",   provider: "Google",          command: "gemini",              configPath: "~/.config/gemini/settings.json", installCommand: "npm install -g @google/gemini-cli",        contextWindow: 1_000_000, resumeCommand: "gemini --resume", injectionStrategy: .systemInstruction, dangerFlag: "--yolo", remoteControlFlag: nil, prefersACP: false),
+        LLMModel(name: "Codex",    provider: "OpenAI",          command: "codex",               configPath: nil,                             installCommand: "npm install -g @openai/codex",             contextWindow: 200_000, resumeCommand: "codex resume",     injectionStrategy: .instructionsFlag,   dangerFlag: "--full-auto", remoteControlFlag: nil, prefersACP: false),
+        LLMModel(name: "Kiro",     provider: "Amazon",          command: "kiro-cli chat",       configPath: nil,                             installCommand: "curl -fsSL https://kiro.dev/install | bash", contextWindow: 200_000, resumeCommand: "kiro-cli chat --resume", injectionStrategy: .none, dangerFlag: "--trust-all-tools", remoteControlFlag: nil, prefersACP: true),
+        LLMModel(name: "Shell",    provider: "Terminal",         command: "",                    configPath: nil,                             installCommand: nil,                                        contextWindow: 0, resumeCommand: nil,                      injectionStrategy: .none,               dangerFlag: nil, remoteControlFlag: nil, prefersACP: false),
     ]
 
     static var configurable: [LLMModel] { all.filter { $0.hasConfig } }
