@@ -2378,8 +2378,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let trustTools: String? = config.kiroTrustLevel == .all
             ? "all"
             : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
+        let tokenPath = config.resolvedKiroTokenPath
         debugLog("ACP: spawning kiroPath=\(kiroPath) cwd=\(cwd) engine=\(engine ?? "default") trust=\(trustTools ?? "safe")")
-        if client.spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools) {
+        if client.spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             debugLog("ACP: spawn succeeded")
             tab.acpClient = client
             acpTimeoutTimer?.cancel()
@@ -2414,7 +2415,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let trustTools: String? = config.kiroTrustLevel == .all
             ? "all"
             : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
-        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools) {
+        let tokenPath = config.resolvedKiroTokenPath
+        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             tab.acpClient = client
         } else {
             showACPSpawnError(kiroPath: kiroPath) {

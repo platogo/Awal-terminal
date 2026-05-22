@@ -469,7 +469,8 @@ struct ATAcpClient *at_acp_spawn(const char *kiro_path,
                                  const char *cwd,
                                  const char *agent,
                                  const char *engine,
-                                 const char *trust_tools);
+                                 const char *trust_tools,
+                                 const char *token_path);
 
 /**
  * Poll next event. Returns null if no event available.
@@ -547,7 +548,8 @@ struct ATAcpClient *at_acp_spawn_resume(const char *kiro_path,
                                         const char *cwd,
                                         const char *session_id,
                                         const char *engine,
-                                        const char *trust_tools);
+                                        const char *trust_tools,
+                                        const char *token_path);
 
 /**
  * Force-kill the ACP child process (hard termination, no graceful cancel).

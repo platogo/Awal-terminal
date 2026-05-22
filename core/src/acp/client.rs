@@ -40,6 +40,7 @@ pub struct AcpClient {
     pgid: i32,
     engine: Option<String>,
     trust_tools: Option<String>,
+    token_path: Option<String>,
 }
 
 impl AcpClient {
@@ -50,9 +51,10 @@ impl AcpClient {
         agent: Option<&str>,
         engine: Option<&str>,
         trust_tools: Option<&str>,
+        token_path: Option<&str>,
     ) -> Result<Self, String> {
         let (child, stdin, rx, reader_handle, pending_methods, pgid, tx) =
-            Self::spawn_process(kiro_path, cwd, agent, engine, trust_tools)?;
+            Self::spawn_process(kiro_path, cwd, agent, engine, trust_tools, token_path)?;
 
         let mut client = Self {
             child,
@@ -72,6 +74,7 @@ impl AcpClient {
             pgid,
             engine: engine.map(|s| s.to_string()),
             trust_tools: trust_tools.map(|s| s.to_string()),
+            token_path: token_path.map(|s| s.to_string()),
         };
         client.send_initialize()?;
         Ok(client)
@@ -84,8 +87,9 @@ impl AcpClient {
         session_id: &str,
         engine: Option<&str>,
         trust_tools: Option<&str>,
+        token_path: Option<&str>,
     ) -> Result<Self, String> {
-        let mut client = Self::spawn(kiro_path, cwd, None, engine, trust_tools)?;
+        let mut client = Self::spawn(kiro_path, cwd, None, engine, trust_tools, token_path)?;
         client.resume_session_id = Some(session_id.to_string());
         Ok(client)
     }
@@ -273,6 +277,7 @@ impl AcpClient {
             None,
             self.engine.as_deref(),
             self.trust_tools.as_deref(),
+            self.token_path.as_deref(),
         )?;
 
         self.child = child;
@@ -307,6 +312,7 @@ impl AcpClient {
         agent: Option<&str>,
         engine: Option<&str>,
         trust_tools: Option<&str>,
+        token_path: Option<&str>,
     ) -> Result<
         (
             Child,
@@ -340,6 +346,10 @@ impl AcpClient {
             } else {
                 cmd.args(["--trust-tools", tools]);
             }
+        }
+
+        if let Some(path) = token_path {
+            cmd.args(["--token-path", path]);
         }
 
         // Put child in its own process group for clean termination

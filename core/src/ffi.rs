@@ -966,6 +966,7 @@ pub extern "C" fn at_acp_spawn(
     agent: *const c_char,
     engine: *const c_char,
     trust_tools: *const c_char,
+    token_path: *const c_char,
 ) -> *mut ATAcpClient {
     if kiro_path.is_null() || cwd.is_null() {
         return std::ptr::null_mut();
@@ -987,7 +988,19 @@ pub extern "C" fn at_acp_spawn(
     } else {
         unsafe { std::ffi::CStr::from_ptr(trust_tools).to_str().ok() }
     };
-    match AcpClient::spawn(kiro, cwd_str, agent_str, engine_str, trust_tools_str) {
+    let token_path_str = if token_path.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(token_path).to_str().ok() }
+    };
+    match AcpClient::spawn(
+        kiro,
+        cwd_str,
+        agent_str,
+        engine_str,
+        trust_tools_str,
+        token_path_str,
+    ) {
         Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
         Err(e) => {
             eprintln!("at_acp_spawn failed: {e}");
@@ -1289,6 +1302,7 @@ pub extern "C" fn at_acp_spawn_resume(
     session_id: *const c_char,
     engine: *const c_char,
     trust_tools: *const c_char,
+    token_path: *const c_char,
 ) -> *mut ATAcpClient {
     if kiro_path.is_null() || cwd.is_null() || session_id.is_null() {
         return std::ptr::null_mut();
@@ -1306,7 +1320,19 @@ pub extern "C" fn at_acp_spawn_resume(
     } else {
         unsafe { std::ffi::CStr::from_ptr(trust_tools).to_str().ok() }
     };
-    match AcpClient::spawn_and_resume(kiro, cwd_str, sid, engine_str, trust_tools_str) {
+    let token_path_str = if token_path.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(token_path).to_str().ok() }
+    };
+    match AcpClient::spawn_and_resume(
+        kiro,
+        cwd_str,
+        sid,
+        engine_str,
+        trust_tools_str,
+        token_path_str,
+    ) {
         Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
         Err(e) => {
             eprintln!("at_acp_spawn_resume failed: {e}");

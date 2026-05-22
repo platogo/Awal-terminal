@@ -45,29 +45,45 @@ class ACPClient {
         let kind: ToolCallKind
     }
 
-    func spawn(kiroPath: String, cwd: String, agent: String? = nil, engine: String? = nil, trustTools: String? = nil) -> Bool {
+    func spawn(kiroPath: String, cwd: String, agent: String? = nil, engine: String? = nil, trustTools: String? = nil, tokenPath: String? = nil) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
             cwd.withCString { cwdPtr in
-                let call = { (aPtr: UnsafePointer<CChar>?, ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
-                    at_acp_spawn(kiroPtr, cwdPtr, aPtr, ePtr, tPtr)
+                let call = { (aPtr: UnsafePointer<CChar>?, ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?, tokPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
+                    at_acp_spawn(kiroPtr, cwdPtr, aPtr, ePtr, tPtr, tokPtr)
                 }
-                switch (agent, engine, trustTools) {
-                case let (a?, e?, t?):
-                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in call(aP, eP, tP) } } }
-                case let (a?, e?, nil):
-                    return a.withCString { aP in e.withCString { eP in call(aP, eP, nil) } }
-                case let (a?, nil, t?):
-                    return a.withCString { aP in t.withCString { tP in call(aP, nil, tP) } }
-                case let (nil, e?, t?):
-                    return e.withCString { eP in t.withCString { tP in call(nil, eP, tP) } }
-                case let (a?, nil, nil):
-                    return a.withCString { aP in call(aP, nil, nil) }
-                case let (nil, e?, nil):
-                    return e.withCString { eP in call(nil, eP, nil) }
-                case let (nil, nil, t?):
-                    return t.withCString { tP in call(nil, nil, tP) }
-                case (nil, nil, nil):
-                    return call(nil, nil, nil)
+                switch (agent, engine, trustTools, tokenPath) {
+                case let (a?, e?, t?, tok?):
+                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in tok.withCString { tokP in call(aP, eP, tP, tokP) } } } }
+                case let (a?, e?, t?, nil):
+                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in call(aP, eP, tP, nil) } } }
+                case let (a?, e?, nil, tok?):
+                    return a.withCString { aP in e.withCString { eP in tok.withCString { tokP in call(aP, eP, nil, tokP) } } }
+                case let (a?, nil, t?, tok?):
+                    return a.withCString { aP in t.withCString { tP in tok.withCString { tokP in call(aP, nil, tP, tokP) } } }
+                case let (nil, e?, t?, tok?):
+                    return e.withCString { eP in t.withCString { tP in tok.withCString { tokP in call(nil, eP, tP, tokP) } } }
+                case let (a?, e?, nil, nil):
+                    return a.withCString { aP in e.withCString { eP in call(aP, eP, nil, nil) } }
+                case let (a?, nil, t?, nil):
+                    return a.withCString { aP in t.withCString { tP in call(aP, nil, tP, nil) } }
+                case let (a?, nil, nil, tok?):
+                    return a.withCString { aP in tok.withCString { tokP in call(aP, nil, nil, tokP) } }
+                case let (nil, e?, t?, nil):
+                    return e.withCString { eP in t.withCString { tP in call(nil, eP, tP, nil) } }
+                case let (nil, e?, nil, tok?):
+                    return e.withCString { eP in tok.withCString { tokP in call(nil, eP, nil, tokP) } }
+                case let (nil, nil, t?, tok?):
+                    return t.withCString { tP in tok.withCString { tokP in call(nil, nil, tP, tokP) } }
+                case let (a?, nil, nil, nil):
+                    return a.withCString { aP in call(aP, nil, nil, nil) }
+                case let (nil, e?, nil, nil):
+                    return e.withCString { eP in call(nil, eP, nil, nil) }
+                case let (nil, nil, t?, nil):
+                    return t.withCString { tP in call(nil, nil, tP, nil) }
+                case let (nil, nil, nil, tok?):
+                    return tok.withCString { tokP in call(nil, nil, nil, tokP) }
+                case (nil, nil, nil, nil):
+                    return call(nil, nil, nil, nil)
                 }
             }
         }
@@ -77,22 +93,30 @@ class ACPClient {
         return true
     }
 
-    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String, engine: String? = nil, trustTools: String? = nil) -> Bool {
+    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String, engine: String? = nil, trustTools: String? = nil, tokenPath: String? = nil) -> Bool {
         let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
             cwd.withCString { cwdPtr in
                 sessionId.withCString { sidPtr in
-                    let call = { (ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
-                        at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr, ePtr, tPtr)
+                    let call = { (ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?, tokPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
+                        at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr, ePtr, tPtr, tokPtr)
                     }
-                    switch (engine, trustTools) {
-                    case let (e?, t?):
-                        return e.withCString { eP in t.withCString { tP in call(eP, tP) } }
-                    case let (e?, nil):
-                        return e.withCString { eP in call(eP, nil) }
-                    case let (nil, t?):
-                        return t.withCString { tP in call(nil, tP) }
-                    case (nil, nil):
-                        return call(nil, nil)
+                    switch (engine, trustTools, tokenPath) {
+                    case let (e?, t?, tok?):
+                        return e.withCString { eP in t.withCString { tP in tok.withCString { tokP in call(eP, tP, tokP) } } }
+                    case let (e?, t?, nil):
+                        return e.withCString { eP in t.withCString { tP in call(eP, tP, nil) } }
+                    case let (e?, nil, tok?):
+                        return e.withCString { eP in tok.withCString { tokP in call(eP, nil, tokP) } }
+                    case let (nil, t?, tok?):
+                        return t.withCString { tP in tok.withCString { tokP in call(nil, tP, tokP) } }
+                    case let (e?, nil, nil):
+                        return e.withCString { eP in call(eP, nil, nil) }
+                    case let (nil, t?, nil):
+                        return t.withCString { tP in call(nil, tP, nil) }
+                    case let (nil, nil, tok?):
+                        return tok.withCString { tokP in call(nil, nil, tokP) }
+                    case (nil, nil, nil):
+                        return call(nil, nil, nil)
                     }
                 }
             }

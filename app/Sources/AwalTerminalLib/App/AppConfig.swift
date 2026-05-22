@@ -120,6 +120,15 @@ struct AppConfig {
     var kiroAgentEngine: String?
     var kiroTrustedTools: [String] = []
     var kiroCreditCostUSD: Double = 0.04
+    var kiroTokenPath: String?
+
+    /// Resolved token path: explicit config value, or default SSO cache file if it exists.
+    var resolvedKiroTokenPath: String? {
+        if let p = kiroTokenPath { return p }
+        let defaultPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".aws/sso/cache/kiro-auth-token-cli.json").path
+        return FileManager.default.fileExists(atPath: defaultPath) ? defaultPath : nil
+    }
 
     // Sleep prevention (keep display awake during terminal activity)
     var preventSleep: Bool = false
@@ -273,6 +282,7 @@ struct AppConfig {
             config.kiroTrustedTools = normalized.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         }
         if let v = parsed["kiro.credit_cost_usd"], let d = Double(v) { config.kiroCreditCostUSD = d }
+        if let v = parsed["kiro.token_path"] { config.kiroTokenPath = v }
 
         // Sleep prevention
         if let v = parsed["system.prevent_sleep"] { config.preventSleep = v == "true" }
