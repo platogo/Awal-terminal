@@ -2411,12 +2411,55 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "ACP Failed to Start"
-        alert.informativeText = "kiro-cli could not be started at: \(kiroPath). Check that kiro-cli is installed and accessible."
+        alert.informativeText = """
+            Could not launch kiro-cli at: \(kiroPath)
+
+            macOS GUI apps don't inherit your shell's PATH, so bare command names won't resolve.
+
+            Fix: click "Locate kiro-cli…" to select the binary, or set it manually in ~/.config/awal/config.toml:
+
+            [kiro]
+            binary_path = "/Users/YOU/.local/bin/kiro-cli"
+            """
         alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Locate kiro-cli…")
+
+        let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertSecondButtonReturn else {
+                completion()
+                return
+            }
+            self?.promptForKiroBinary(completion: completion)
+        }
+
         if let window = window {
-            alert.beginSheetModal(for: window) { _ in completion() }
+            alert.beginSheetModal(for: window, completionHandler: handler)
         } else {
-            alert.runModal()
+            let response = alert.runModal()
+            handler(response)
+        }
+    }
+
+    private func promptForKiroBinary(completion: @escaping () -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select the kiro-cli binary"
+
+        let localBin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin")
+        if FileManager.default.fileExists(atPath: localBin.path) {
+            panel.directoryURL = localBin
+        }
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else {
+                completion()
+                return
+            }
+            let path = url.path
+            ConfigWriter.updateValue(key: "kiro.binary_path", value: "\"\(path)\"")
+            AppConfig.reload()
             completion()
         }
     }
