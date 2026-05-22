@@ -2365,6 +2365,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
     /// Start an ACP session on a specific tab.
     func startACPSession(tab: TabState, kiroPath: String, cwd: String) {
+        debugLog("ACP: startACPSession kiroPath=\(kiroPath) cwd=\(cwd)")
         guard ModelCatalog.find("Kiro") != nil else { return }
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
@@ -2377,8 +2378,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             ? "all"
             : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
         if client.spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools) {
+            debugLog("ACP: spawn succeeded")
             tab.acpClient = client
         } else {
+            debugLog("ACP: spawn FAILED")
             showACPSpawnError(kiroPath: kiroPath) {
                 self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
             }
@@ -2502,6 +2505,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             )
         }
         client.onError = { [weak self] msg in
+            debugLog("ACP: error: \(msg)")
             self?.flashStatusBar("ACP Error: \(msg)")
         }
         client.onTurnEnd = { [weak self, weak tab] _ in
@@ -2534,6 +2538,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             }
         }
         client.onSessionReady = { [weak self, weak tab] in
+            debugLog("ACP: session ready")
             self?.flashStatusBar("ACP: Session ready")
             // Load session history for the side panel
             if let tab, let cwd = tab.statusBar.currentPath {
@@ -2563,6 +2568,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.fallbackToPTY(tab: tab, message: "ACP: Disconnected — switching to PTY mode")
         }
         client.onAuthRequired = { [weak self, weak tab] msg in
+            debugLog("ACP: auth required")
             guard let self, let tab else { return }
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
