@@ -635,8 +635,8 @@ extension TerminalView {
         }
 
         // Route to ACP mode if the model prefers it
-        if model.prefersACP, commandOverride == nil, let callback = onACPLaunchRequested {
-            callback(model, workingDir)
+        if model.prefersACP, commandOverride == nil, let dir = workingDir, let callback = onACPLaunchRequested {
+            callback(model, dir)
             onSessionChanged?(model.name, model.provider, Int(termCols), Int(termRows))
             return
         }

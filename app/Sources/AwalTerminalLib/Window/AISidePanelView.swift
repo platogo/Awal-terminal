@@ -667,6 +667,7 @@ class AISidePanelView: NSView {
 
     func updateTokenDisplay(input: Int, output: Int) {
         guard hasTokenTracking else { return }
+        let tracker = self.tokenTracker
 
         if currentModel == "Kiro" {
             let credits = Double(input + output) / 1000.0
@@ -678,7 +679,6 @@ class AISidePanelView: NSView {
             totalTokensLabel.isHidden = false
             inputTokensLabel.stringValue = "  Input:  \(formatTokenCount(input))"
             outputTokensLabel.stringValue = "  Output: \(formatTokenCount(output))"
-            let tracker = self.tokenTracker
             let total = tracker.cumulativeInputFull + tracker.cumulativeCacheRead + tracker.totalOutput
             totalTokensLabel.stringValue = "  Total:  \(formatTokenCount(total))"
         }
