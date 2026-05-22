@@ -89,6 +89,7 @@ struct AppConfig {
     var tabsLoadingIndicator: Bool = false
     var tabsWorktreeIsolation: Bool = true
     var tabsWorktreeBranchPrefix: String = "awal/tab"
+    var tabsPipelineAutoClose: Bool = false
     var quitConfirmClose: Bool = true
 
     // AI Components
@@ -246,6 +247,7 @@ struct AppConfig {
         if let v = parsed["tabs.loading_indicator"] { config.tabsLoadingIndicator = v == "true" }
         if let v = parsed["tabs.worktree_isolation"] { config.tabsWorktreeIsolation = v == "true" }
         if let v = parsed["tabs.worktree_branch_prefix"] { config.tabsWorktreeBranchPrefix = v }
+        if let v = parsed["tabs.pipeline_auto_close"] { config.tabsPipelineAutoClose = v == "true" }
         if let v = parsed["quit.confirm_close"] { config.quitConfirmClose = v == "true" }
         if let v = parsed["tabs.random_color_palette"] {
             config.tabsRandomColorPalette = v.split(separator: ",")

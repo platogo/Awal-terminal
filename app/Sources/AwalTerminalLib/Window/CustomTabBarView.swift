@@ -40,6 +40,7 @@ struct TabGroupDisplayInfo {
     let color: NSColor?
     let isCollapsed: Bool
     let tabCount: Int
+    let progressLabel: String?
 }
 
 final class CustomTabBarView: NSView {
@@ -615,7 +616,8 @@ private class TabGroupHeaderView: NSView {
         layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner] // bottom only (layer coords)
 
         let displayName = isCollapsed ? "\(group.name) (\(group.tabCount))" : group.name
-        nameLabel.stringValue = displayName
+        let progressSuffix = group.progressLabel.map { " — \($0)" } ?? ""
+        nameLabel.stringValue = displayName + progressSuffix
         nameLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         nameLabel.textColor = .white
         nameLabel.lineBreakMode = .byTruncatingTail
@@ -657,7 +659,8 @@ private class TabGroupHeaderView: NSView {
         addSubview(chevronImageView)
 
         let displayName = isCollapsed ? "\(group.name) (\(group.tabCount))" : group.name
-        nameLabel.stringValue = displayName.uppercased()
+        let progressSuffix = group.progressLabel.map { " — \($0)" } ?? ""
+        nameLabel.stringValue = (displayName + progressSuffix).uppercased()
         nameLabel.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
         nameLabel.textColor = NSColor(white: 0.4, alpha: 1.0)
         nameLabel.lineBreakMode = .byTruncatingTail

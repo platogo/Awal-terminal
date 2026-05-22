@@ -445,7 +445,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         let displayGroups = tabGroups.map { g -> TabGroupDisplayInfo in
             let count = tabs.filter { $0.groupID == g.id }.count
-            return TabGroupDisplayInfo(id: g.id, name: g.name, color: g.color, isCollapsed: g.isCollapsed, tabCount: count)
+            return TabGroupDisplayInfo(id: g.id, name: g.name, color: g.color, isCollapsed: g.isCollapsed, tabCount: count, progressLabel: g.progressLabel)
         }
         tabBar.reloadTabs(tabs: displayTabs, selectedIndex: activeTabIndex, groups: displayGroups)
         markStateDirty()
@@ -891,6 +891,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         deleteGroup(group, closeTabs: true)
     }
 
+    @objc private func showGroupInMissionControl(_ sender: NSMenuItem) {
+        guard let groupID = sender.representedObject as? UUID else { return }
+        MissionControlWindow.show(filterGroupID: groupID)
+    }
+
     @objc private func contextSetGroupColor(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? GroupColorAction else { return }
         action.group.color = action.color
@@ -1091,6 +1096,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         closeGroupItem.representedObject = group
         menu.addItem(closeGroupItem)
 
+        let mcItem = NSMenuItem(title: "Show in Mission Control", action: #selector(showGroupInMissionControl(_:)), keyEquivalent: "")
+        mcItem.target = self
+        mcItem.representedObject = groupID
+        menu.addItem(mcItem)
+
         menu.popUp(positioning: nil, at: location, in: tabBar)
     }
 
@@ -1194,6 +1204,24 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         tabGroups.removeAll { $0.id == group.id }
         reloadTabBar()
+    }
+
+    private func findOrCreatePipelineGroup(sessionId: String, role: String?) -> TabGroup {
+        if let existing = tabGroups.first(where: { $0.pipelineSessionId == sessionId }) {
+            return existing
+        }
+        let group = TabGroup(
+            name: "Pipeline",
+            color: PipelineStage.from(role: role)?.color ?? NSColor(white: 0.4, alpha: 1.0),
+            pipelineSessionId: sessionId,
+            autoCloseOnComplete: AppConfig.shared.tabsPipelineAutoClose
+        )
+        tabGroups.append(group)
+        return group
+    }
+
+    private func closePipelineGroup(_ group: TabGroup) {
+        deleteGroup(group, closeTabs: true)
     }
 
     func addTab(at index: Int, toGroup group: TabGroup) {
@@ -2482,14 +2510,39 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.showDiffReview(requestId: requestId, path: path, content: content, cwd: cwd)
             }
         }
-        client.onSubagentSpawned = { [weak tab] id, name, role, parentSid, deps in
-            tab?.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
+        client.onSubagentSpawned = { [weak self, weak tab] id, name, role, parentSid, deps in
+            guard let tab else { return }
+            tab.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
+
+            // Auto-group: find or create a pipeline group for this parentSessionId
+            if let self, let sessionId = parentSid {
+                let group = self.findOrCreatePipelineGroup(sessionId: sessionId, role: role)
+                tab.groupID = group.id
+                group.totalStages = tab.subagentTracker.subagents.count
+                if group.color == nil, let stageColor = PipelineStage.from(role: role)?.color {
+                    group.color = stageColor
+                }
+                self.reloadTabBar()
+            }
         }
         client.onSubagentProgress = { [weak tab] id, phase, tokens in
             tab?.subagentTracker.handleProgress(id: id, phase: phase, tokensUsed: tokens)
         }
-        client.onSubagentComplete = { [weak tab] id, tokens in
-            tab?.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
+        client.onSubagentComplete = { [weak self, weak tab] id, tokens in
+            guard let tab else { return }
+            tab.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
+
+            // Update pipeline group progress
+            if let self, let gid = tab.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
+                group.completedStages = self.tabs
+                    .filter { $0.groupID == gid }
+                    .filter { !$0.subagentTracker.orderedSubagents.contains(where: { $0.isActive }) }
+                    .count
+                if group.autoCloseOnComplete && group.completedStages >= group.totalStages && group.totalStages > 0 {
+                    self.closePipelineGroup(group)
+                }
+                self.reloadTabBar()
+            }
         }
         client.onSubagentError = { [weak tab] id, message in
             tab?.subagentTracker.handleError(id: id, message: message)
