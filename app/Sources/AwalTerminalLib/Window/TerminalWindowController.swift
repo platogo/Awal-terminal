@@ -2354,6 +2354,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     /// Start an ACP session with kiro-cli at the given path.
     func startACPSession(kiroPath: String, cwd: String) {
         let tab = activeTab
+        tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
         tab.subagentTracker.reset()
         let client = ACPClient()
@@ -2373,6 +2374,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     /// Resume an existing ACP session.
     func resumeACPSession(kiroPath: String, cwd: String, sessionId: String) {
         let tab = activeTab
+        tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
         tab.subagentTracker.reset()
         let client = ACPClient()
@@ -2431,7 +2433,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         client.onTurnEnd = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
-            self.toolCallStack?.clearAll()
+            if tab.subagentTracker.activeCount == 0 {
+                self.toolCallStack?.clearAll()
+            }
             self.flashStatusBar("ACP: Turn complete")
             tab.tokenTracker.incrementTurns()
             tab.aiSidePanel.updateTokenDisplay(
@@ -2486,9 +2490,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let tab else { return }
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
-        client.onToolCallStarted = { [weak self] state in
+        client.onToolCallStarted = { [weak self, weak tab] state in
             self?.ensureToolCallStack()
             self?.toolCallStack?.addToolCall(state)
+            tab?.tokenTracker.appendToolCall(state.title)
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)

@@ -84,13 +84,30 @@ class TokenTracker {
     /// Update token estimates from ACP char counts (chars/4 ≈ tokens).
     func updateFromACP(inputChars: Int, outputChars: Int) {
         lock.lock()
-        currentInput = (inputChars + outputChars) / 4
+        currentInput = inputChars / 4
         totalOutput = outputChars / 4
         cumulativeInputFull = inputChars / 4
         modelUsed = "Kiro"
         // Estimate breakdown: ACP doesn't provide granular data, so approximate
         contextBreakdown = ContextBreakdown()
         contextBreakdown.conversation = currentInput
+        // Update sparkline so dashboard has data mid-turn
+        let contextWindow = ModelCatalog.find("Kiro")?.contextWindow ?? 200_000
+        let fraction = contextWindow > 0
+            ? min(Double(currentInput) / Double(contextWindow), 1.0) : 0.0
+        if sparklineHistory.isEmpty {
+            sparklineHistory.append(fraction)
+        } else {
+            sparklineHistory[sparklineHistory.count - 1] = fraction
+        }
+        lock.unlock()
+    }
+
+    func appendToolCall(_ name: String) {
+        lock.lock()
+        if !toolCalls.contains(name) {
+            toolCalls.append(name)
+        }
         lock.unlock()
     }
 

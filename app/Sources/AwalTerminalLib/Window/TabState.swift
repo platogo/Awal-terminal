@@ -24,6 +24,9 @@ class TabState {
     /// Per-tab ACP client for Kiro sessions.
     var acpClient: ACPClient?
 
+    /// Project path for ACP sessions (used for tab title since PTY CWD is unavailable).
+    var acpProjectPath: String?
+
     /// Per-tab tracker for files modified by the AI agent.
     let agentChanges = AgentChangesTracker()
 
@@ -41,6 +44,10 @@ class TabState {
     var title: String {
         if let custom = customTitle { return custom }
         let model = statusBar.currentModelName.isEmpty ? "Shell" : statusBar.currentModelName
+        if acpClient != nil, let projectPath = acpProjectPath {
+            let folder = (projectPath as NSString).lastPathComponent
+            return "\(model) — \(folder)"
+        }
         if let path = statusBar.currentPath {
             let folder = (path as NSString).lastPathComponent
             if let wt = worktreeInfo, !wt.isOriginal, let branch = wt.branchName {
