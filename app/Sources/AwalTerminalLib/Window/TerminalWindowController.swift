@@ -1523,6 +1523,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let state = WindowStateStore.load() else { return }
             self.restoreFromSavedState(state)
         }
+        terminal.onACPLaunchRequested = { [weak self, weak tab] model, dir in
+            guard let self, let tab, model.name == "Kiro" else { return }
+            let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
+            self.startACPSession(tab: tab, kiroPath: kiroPath, cwd: dir)
+        }
 
         terminal.onSessionChanged = { [weak self, weak terminal, weak tab] model, provider, cols, rows in
             guard let self, let terminal, let tab else { return }
@@ -2353,7 +2358,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
     /// Start an ACP session with kiro-cli at the given path.
     func startACPSession(kiroPath: String, cwd: String) {
-        let tab = activeTab
+        startACPSession(tab: activeTab, kiroPath: kiroPath, cwd: cwd)
+    }
+
+    /// Start an ACP session on a specific tab.
+    func startACPSession(tab: TabState, kiroPath: String, cwd: String) {
+        guard ModelCatalog.find("Kiro") != nil else { return }
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
         tab.subagentTracker.reset()
@@ -2416,12 +2426,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
-        client.onTextChunk = { [weak self, weak tab] text in
-            guard let tab else { return }
+        client.onTextChunk = { [weak self, weak tab, weak client] text in
+            guard let tab, let client else { return }
             self?.flashStatusBar(text)
             tab.tokenTracker.updateFromACP(
-                inputChars: tab.acpClient?.totalCharsSent ?? 0,
-                outputChars: tab.acpClient?.totalCharsReceived ?? 0
+                inputChars: client.totalCharsSent,
+                outputChars: client.totalCharsReceived
             )
             tab.aiSidePanel.updateTokenDisplay(
                 input: tab.tokenTracker.currentInput,

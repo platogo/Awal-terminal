@@ -678,12 +678,12 @@ class AISidePanelView: NSView {
             totalTokensLabel.isHidden = false
             inputTokensLabel.stringValue = "  Input:  \(formatTokenCount(input))"
             outputTokensLabel.stringValue = "  Output: \(formatTokenCount(output))"
-            let total = input + output
+            let tracker = self.tokenTracker
+            let total = tracker.cumulativeInputFull + tracker.cumulativeCacheRead + tracker.totalOutput
             totalTokensLabel.stringValue = "  Total:  \(formatTokenCount(total))"
         }
 
         // Calculate cost using cumulative breakdown (full-rate vs cache-rate)
-        let tracker = self.tokenTracker
         let cost = TokenTracker.estimateCost(
             model: currentModel,
             inputFull: tracker.cumulativeInputFull,

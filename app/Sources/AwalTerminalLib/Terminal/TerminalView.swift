@@ -88,7 +88,7 @@ class TerminalView: NSView {
     var onRemoteControlChanged: ((_ active: Bool, _ url: String?) -> Void)?
     var onSleepPreventionChanged: ((_ active: Bool) -> Void)?
     var onRestoreSession: (() -> Void)?
-    var onACPLaunchRequested: ((_ model: LLMModel, _ workingDir: String?) -> Void)?
+    var onACPLaunchRequested: ((_ model: LLMModel, _ workingDir: String) -> Void)?
 
     /// Whether the current session is running in danger mode (unrestricted permissions).
     var isDangerMode: Bool = false

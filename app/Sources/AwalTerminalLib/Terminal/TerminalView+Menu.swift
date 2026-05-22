@@ -657,6 +657,13 @@ extension TerminalView {
             if commandOverride == nil, let agent = config.kiroDefaultAgent {
                 modelCmd += " --agent \(agent.shellEscaped)"
             }
+            // Route to ACP if available
+            if commandOverride == nil, let dir = workingDir {
+                isWaitingForOutput = false
+                loadingMessageText = ""
+                onACPLaunchRequested?(model, dir)
+                return
+            }
         }
 
         // Danger mode: append skip-permissions flag if supported
