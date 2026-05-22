@@ -92,4 +92,26 @@ final class TokenTrackerTests: XCTestCase {
         let result = TokenTracker.claudeProjectDir(for: "/nonexistent/path/12345")
         XCTAssertNil(result)
     }
+
+    // MARK: - Context Breakdown
+
+    func testUpdateFromACPResetsBreakdown() {
+        let tracker = TokenTracker()
+        tracker.updateFromACP(inputChars: 4000, outputChars: 400)
+        // ACP sets conversation = currentInput, other fields reset to 0
+        XCTAssertEqual(tracker.contextBreakdown.conversation, tracker.currentInput)
+        XCTAssertEqual(tracker.contextBreakdown.systemPrompt, 0)
+        XCTAssertEqual(tracker.contextBreakdown.skills, 0)
+        XCTAssertEqual(tracker.contextBreakdown.toolResults, 0)
+    }
+
+    // MARK: - Sparkline History
+
+    func testIncrementTurnsAppendsSparklinePoint() {
+        let tracker = TokenTracker()
+        tracker.updateFromACP(inputChars: 4000, outputChars: 0)
+        tracker.incrementTurns()
+        XCTAssertEqual(tracker.sparklineHistory.count, 1)
+        XCTAssertGreaterThan(tracker.sparklineHistory[0], 0.0)
+    }
 }
