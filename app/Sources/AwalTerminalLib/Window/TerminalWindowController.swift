@@ -1664,7 +1664,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let tab else { return }
             let config = AppConfig.shared
             let kiroPath = config.kiroBinaryPath ?? "kiro-cli"
-            let cwd = workingDir ?? tab.statusBar.currentPath ?? FileManager.default.currentDirectoryPath
+            let cwd = workingDir
             self.startACPSession(kiroPath: kiroPath, cwd: cwd)
         }
 
@@ -2424,7 +2424,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let terminal = tab.splitContainer.focusedTerminal
         guard let model = ModelCatalog.find("Kiro") else { return }
         let dir = tab.statusBar.currentPath ?? tab.acpProjectPath
-        terminal.launchSessionDirect(model: model, workingDir: dir)
+        terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
