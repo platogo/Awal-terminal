@@ -2494,6 +2494,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
         client.onTextChunk = { [weak self, weak tab, weak client] text in
             guard let tab, let client else { return }
+            debugLog("ACP: text chunk: \(text)")
             self?.flashStatusBar(text)
             tab.tokenTracker.updateFromACP(
                 inputChars: client.totalCharsSent,
@@ -2509,6 +2510,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.flashStatusBar("ACP Error: \(msg)")
         }
         client.onTurnEnd = { [weak self, weak tab] _ in
+            debugLog("ACP: turn end")
             guard let self, let tab else { return }
             if let credits = tab.acpClient?.lastTurnCredits, credits > 0 {
                 tab.tokenTracker.addCredits(credits)
@@ -2573,14 +2575,17 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
         client.onToolCallStarted = { [weak self, weak tab] state in
+            debugLog("ACP: tool call started: \(state.title)")
             self?.ensureToolCallStack()
             self?.toolCallStack?.addToolCall(state)
             tab?.tokenTracker.appendToolCall(state.title)
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
+            debugLog("ACP: tool call updated: \(id) status=\(status)")
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
         }
         client.onPermissionRequest = { [weak self] request in
+            debugLog("ACP: permission request: \(request.toolName)")
             self?.ensureToolCallStack()
             self?.toolCallStack?.addPermissionRequest(request)
         }
