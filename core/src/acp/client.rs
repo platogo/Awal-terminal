@@ -4,7 +4,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
@@ -28,6 +28,7 @@ pub struct AcpClient {
     rx: mpsc::Receiver<AcpEvent>,
     _reader_handle: JoinHandle<()>,
     pending_methods: Arc<Mutex<HashMap<u64, String>>>,
+    tx: mpsc::Sender<AcpEvent>,
     next_id: u64,
     session_id: Option<String>,
     state: AcpState,
@@ -50,7 +51,7 @@ impl AcpClient {
         engine: Option<&str>,
         trust_tools: Option<&str>,
     ) -> Result<Self, String> {
-        let (child, stdin, rx, reader_handle, pending_methods, pgid) =
+        let (child, stdin, rx, reader_handle, pending_methods, pgid, tx) =
             Self::spawn_process(kiro_path, cwd, agent, engine, trust_tools)?;
 
         let mut client = Self {
@@ -59,6 +60,7 @@ impl AcpClient {
             rx,
             _reader_handle: reader_handle,
             pending_methods,
+            tx,
             next_id: 0,
             session_id: None,
             state: AcpState::Initializing,
@@ -265,7 +267,7 @@ impl AcpClient {
         let _ = self.child.wait();
 
         self.crash_count += 1;
-        let (child, stdin, rx, reader_handle, pending_methods, pgid) = Self::spawn_process(
+        let (child, stdin, rx, reader_handle, pending_methods, pgid, tx) = Self::spawn_process(
             &self.kiro_path,
             &self.cwd,
             None,
@@ -278,6 +280,7 @@ impl AcpClient {
         self.rx = rx;
         self._reader_handle = reader_handle;
         self.pending_methods = pending_methods;
+        self.tx = tx;
         self.next_id = 0;
         self.pgid = pgid;
 
@@ -312,6 +315,7 @@ impl AcpClient {
             JoinHandle<()>,
             Arc<Mutex<HashMap<u64, String>>>,
             i32,
+            mpsc::Sender<AcpEvent>,
         ),
         String,
     > {
@@ -319,7 +323,7 @@ impl AcpClient {
         cmd.arg("acp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .current_dir(cwd);
 
         if let Some(name) = agent {
@@ -360,10 +364,31 @@ impl AcpClient {
             .stdin
             .take()
             .ok_or("Failed to capture stdin".to_string())?;
+        let stderr = child.stderr.take();
 
         let (tx, rx) = mpsc::channel();
         let pending_methods = Arc::new(Mutex::new(HashMap::new()));
-        let reader_handle = spawn_reader(stdout, tx, pending_methods.clone());
+        let reader_handle = spawn_reader(stdout, tx.clone(), pending_methods.clone());
+
+        // Spawn stderr reader thread
+        if let Some(stderr) = stderr {
+            let stderr_tx = tx.clone();
+            thread::spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                use std::io::BufRead;
+                for line in reader.lines() {
+                    match line {
+                        Ok(l) if !l.is_empty() => {
+                            if stderr_tx.send(AcpEvent::Stderr(l)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+        }
 
         Ok((
             child,
@@ -372,6 +397,7 @@ impl AcpClient {
             reader_handle,
             pending_methods,
             pgid,
+            tx,
         ))
     }
 
@@ -438,6 +464,7 @@ impl AcpClient {
         self.stdin
             .flush()
             .map_err(|e| format!("Flush failed: {e}"))?;
+        let _ = self.tx.send(AcpEvent::ProtocolLog(format!("→ {method}")));
         Ok(())
     }
 

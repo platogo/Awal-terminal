@@ -341,6 +341,14 @@ class ACPClient {
                 if let message = text, let subId = text2 {
                     onSubagentError?(subId, message)
                 }
+            case 17: // Stderr
+                if let text {
+                    debugLog("ACP stderr: \(text)")
+                }
+            case 18: // ProtocolLog
+                if let text {
+                    debugLog("ACP protocol: \(text)")
+                }
             default:
                 break
             }

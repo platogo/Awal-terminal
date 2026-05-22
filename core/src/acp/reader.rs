@@ -76,6 +76,10 @@ pub enum AcpEvent {
         subagent_id: String,
         message: String,
     },
+    /// stderr output from kiro-cli
+    Stderr(String),
+    /// Protocol diagnostic: "→ method" for sent, "← method" for received
+    ProtocolLog(String),
 }
 
 /// Auth-related JSON-RPC error codes.
@@ -117,6 +121,21 @@ pub fn spawn_reader(
             };
             let event = parse_message(msg, &pending_methods);
             if let Some(ev) = event {
+                // Emit protocol log for received messages
+                let log_label = match &ev {
+                    AcpEvent::Initialized => Some("← initialize"),
+                    AcpEvent::SessionCreated(_) => Some("← session/new"),
+                    AcpEvent::TurnEnd { .. } => Some("← session/prompt"),
+                    AcpEvent::Cancelled => Some("← session/cancel"),
+                    AcpEvent::PermissionRequest { .. } => Some("← session/request_permission"),
+                    AcpEvent::AuthRequired(_) => Some("← auth_error"),
+                    AcpEvent::FsReadRequest { .. } => Some("← fs/read_text_file"),
+                    AcpEvent::FsWriteRequest { .. } => Some("← fs/write_text_file"),
+                    _ => None,
+                };
+                if let Some(label) = log_label {
+                    let _ = tx.send(AcpEvent::ProtocolLog(label.to_string()));
+                }
                 if tx.send(ev).is_err() {
                     break;
                 }
