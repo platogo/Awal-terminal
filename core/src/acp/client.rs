@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -350,14 +349,6 @@ impl AcpClient {
 
         if let Some(path) = token_path {
             cmd.args(["--token-path", path]);
-        }
-
-        // Put child in its own process group for clean termination
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setpgid(0, 0);
-                Ok(())
-            });
         }
 
         let mut child = cmd
