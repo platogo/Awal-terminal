@@ -130,6 +130,24 @@ struct AppConfig {
         return FileManager.default.fileExists(atPath: defaultPath) ? defaultPath : nil
     }
 
+    /// Resolved ACP binary: looks for kiro-cli-chat next to kiroBinaryPath, or falls back to kiroBinaryPath.
+    var resolvedKiroACPBinaryPath: String {
+        if let configured = kiroBinaryPath {
+            let dir = (configured as NSString).deletingLastPathComponent
+            let chatBinary = (dir as NSString).appendingPathComponent("kiro-cli-chat")
+            if FileManager.default.fileExists(atPath: chatBinary) {
+                return chatBinary
+            }
+            return configured
+        }
+        let defaultChat = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin/kiro-cli-chat").path
+        if FileManager.default.fileExists(atPath: defaultChat) {
+            return defaultChat
+        }
+        return "kiro-cli"
+    }
+
     // Sleep prevention (keep display awake during terminal activity)
     var preventSleep: Bool = false
 
