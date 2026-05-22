@@ -2379,7 +2379,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         if client.spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools) {
             tab.acpClient = client
         } else {
-            fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
+            showACPSpawnError(kiroPath: kiroPath) {
+                self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
+            }
         }
     }
 
@@ -2399,7 +2401,23 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools) {
             tab.acpClient = client
         } else {
-            flashStatusBar("ACP: Failed to resume session")
+            showACPSpawnError(kiroPath: kiroPath) {
+                self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
+            }
+        }
+    }
+
+    private func showACPSpawnError(kiroPath: String, completion: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "ACP Failed to Start"
+        alert.informativeText = "kiro-cli could not be started at: \(kiroPath). Check that kiro-cli is installed and accessible."
+        alert.addButton(withTitle: "OK")
+        if let window = window {
+            alert.beginSheetModal(for: window) { _ in completion() }
+        } else {
+            alert.runModal()
+            completion()
         }
     }
 
