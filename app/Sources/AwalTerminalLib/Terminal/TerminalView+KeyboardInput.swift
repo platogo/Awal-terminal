@@ -265,6 +265,14 @@ extension TerminalView {
     }
 
     func handleTerminalKey(_ event: NSEvent) {
+        // Intercept d/a/r for active diff review
+        let diffMods = event.modifierFlags.intersection([.command, .control, .option])
+        if diffMods.isEmpty,
+           let wc = window?.windowController as? TerminalWindowController,
+           let diffReview = wc.activeDiffReview {
+            if diffReview.handleKey(event) { return }
+        }
+
         // Intercept Enter/Esc for pending permission approvals
         let permMods = event.modifierFlags.intersection([.command, .control, .option])
         if permMods.isEmpty,

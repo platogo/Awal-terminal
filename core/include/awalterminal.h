@@ -87,6 +87,35 @@ typedef struct ATAcpEvent {
 } ATAcpEvent;
 
 /**
+ * A single diff line exposed to C.
+ */
+typedef struct ATDiffLine {
+    uint8_t kind;
+    char *content;
+} ATDiffLine;
+
+/**
+ * A parsed diff hunk exposed to C.
+ */
+typedef struct ATDiffHunk {
+    char *header;
+    uint32_t old_start;
+    uint32_t old_count;
+    uint32_t new_start;
+    uint32_t new_count;
+    struct ATDiffLine *lines;
+    uint32_t line_count;
+} ATDiffHunk;
+
+/**
+ * Parsed diff result.
+ */
+typedef struct ATDiffResult {
+    struct ATDiffHunk *hunks;
+    uint32_t hunk_count;
+} ATDiffResult;
+
+/**
  * C-compatible region for FFI.
  */
 typedef struct CRecordedRegion {
@@ -520,6 +549,24 @@ void at_acp_force_kill(struct ATAcpClient *client);
  * Destroy the ACP client (kills child process).
  */
 void at_acp_destroy(struct ATAcpClient *client);
+
+/**
+ * Parse a unified diff into hunks. Caller must free with `at_acp_free_diff_result`.
+ */
+struct ATDiffResult *at_acp_parse_diff(const char *diff_text);
+
+/**
+ * Apply selected hunks to original content. Returns new content string (caller frees with `at_free_string`).
+ */
+char *at_acp_apply_hunks(const char *original,
+                         const char *diff_text,
+                         const bool *accepted,
+                         uint32_t accepted_count);
+
+/**
+ * Free a diff result returned by `at_acp_parse_diff`.
+ */
+void at_acp_free_diff_result(struct ATDiffResult *result);
 
 /**
  * Create a new recording.

@@ -24,6 +24,9 @@ class TabState {
     /// Per-tab ACP client for Kiro sessions.
     var acpClient: ACPClient?
 
+    /// Per-tab tracker for files modified by the AI agent.
+    let agentChanges = AgentChangesTracker()
+
     /// Selected agent name for this tab's ACP session.
     var agentName: String?
 
