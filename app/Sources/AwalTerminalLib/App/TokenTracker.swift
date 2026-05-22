@@ -28,6 +28,7 @@ class TokenTracker {
     private(set) var toolCalls: [String] = []
     private(set) var modelUsed: String = ""
     private(set) var sessionId: String = ""
+    private(set) var creditsUsed: Double = 0.0
 
     /// Context breakdown by category (estimated).
     private(set) var contextBreakdown: ContextBreakdown = ContextBreakdown()
@@ -43,6 +44,12 @@ class TokenTracker {
     private var sessionStart: Date = Date()
 
     init() {}
+
+    func addCredits(_ amount: Double) {
+        lock.lock()
+        creditsUsed += amount
+        lock.unlock()
+    }
 
     // MARK: - Shared Pricing
 
@@ -68,7 +75,10 @@ class TokenTracker {
     }
 
     var estimatedCost: Double {
-        Self.estimateCost(model: modelUsed, inputFull: cumulativeInputFull, cacheRead: cumulativeCacheRead, output: totalOutput)
+        if modelUsed == "Kiro" && creditsUsed > 0 {
+            return creditsUsed * AppConfig.shared.kiroCreditCostUSD
+        }
+        return Self.estimateCost(model: modelUsed, inputFull: cumulativeInputFull, cacheRead: cumulativeCacheRead, output: totalOutput)
     }
 
     /// Find the Claude projects directory for a given working path.
@@ -84,13 +94,30 @@ class TokenTracker {
     /// Update token estimates from ACP char counts (chars/4 ≈ tokens).
     func updateFromACP(inputChars: Int, outputChars: Int) {
         lock.lock()
-        currentInput = (inputChars + outputChars) / 4
+        currentInput = inputChars / 4
         totalOutput = outputChars / 4
         cumulativeInputFull = inputChars / 4
         modelUsed = "Kiro"
         // Estimate breakdown: ACP doesn't provide granular data, so approximate
         contextBreakdown = ContextBreakdown()
         contextBreakdown.conversation = currentInput
+        // Update sparkline so dashboard has data mid-turn
+        let contextWindow = ModelCatalog.find("Kiro")?.contextWindow ?? 200_000
+        let fraction = contextWindow > 0
+            ? min(Double(currentInput) / Double(contextWindow), 1.0) : 0.0
+        if sparklineHistory.isEmpty {
+            sparklineHistory.append(fraction)
+        } else {
+            sparklineHistory[sparklineHistory.count - 1] = fraction
+        }
+        lock.unlock()
+    }
+
+    func appendToolCall(_ name: String) {
+        lock.lock()
+        if !toolCalls.contains(name) {
+            toolCalls.append(name)
+        }
         lock.unlock()
     }
 
@@ -266,6 +293,9 @@ class TokenTracker {
     }
 
     var displayString: String {
+        if modelUsed == "Kiro" && creditsUsed > 0 {
+            return String(format: "%.2f cr • $%.3f", creditsUsed, creditsUsed * AppConfig.shared.kiroCreditCostUSD)
+        }
         guard currentInput > 0 || totalOutput > 0 else { return "" }
         return "\(formatTokenCount(currentInput)) ctx · \(formatTokenCount(totalOutput)) out"
     }
@@ -280,6 +310,7 @@ class TokenTracker {
         toolCalls = []
         modelUsed = ""
         sessionId = ""
+        creditsUsed = 0.0
         lastFile = ""
         lastFileSize = 0
         sessionStart = Date()

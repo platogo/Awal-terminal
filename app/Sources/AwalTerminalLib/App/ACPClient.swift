@@ -29,6 +29,8 @@ class ACPClient {
     private(set) var activeToolCalls: [String: ToolCallState] = [:]
     private(set) var totalCharsReceived: Int = 0
     private(set) var totalCharsSent: Int = 0
+    private(set) var lastTurnCredits: Double = 0.0
+    private(set) var totalCreditsUsed: Double = 0.0
 
     var estimatedTokens: Int { (totalCharsReceived + totalCharsSent) / 4 }
 
@@ -244,7 +246,17 @@ class ACPClient {
             case 5: // TurnEnd
                 isPrompting = false
                 activeToolCalls.removeAll()
-                onTurnEnd?(text2 ?? "")
+                lastTurnCredits = 0.0
+                var stopReason = text2 ?? ""
+                if let meta = text2 {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    stopReason = parts.count > 0 ? String(parts[0]) : ""
+                    if parts.count > 1, let c = Double(parts[1]) {
+                        lastTurnCredits = c
+                        totalCreditsUsed += c
+                    }
+                }
+                onTurnEnd?(stopReason)
             case 6: // Error
                 if let text { onError?(text) }
             case 7: // ProcessExited

@@ -5,13 +5,17 @@ import AppKit
 class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
 
     private static var shared: MissionControlWindow?
+    private var filterGroupID: UUID?
 
-    static func show() {
+    static func show(filterGroupID: UUID? = nil) {
         if let existing = shared {
+            existing.filterGroupID = filterGroupID
+            existing.refreshData()
             existing.window?.makeKeyAndOrderFront(nil)
             return
         }
         let controller = MissionControlWindow()
+        controller.filterGroupID = filterGroupID
         shared = controller
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
@@ -212,6 +216,8 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
                 // Only show tabs with an active AI session (not plain Shell)
                 let model = tab.statusBar.currentModelName
                 guard !model.isEmpty && model != "Shell" else { continue }
+                // Filter by pipeline group if set
+                if let filterID = filterGroupID, tab.groupID != filterID { continue }
                 let agentRow = AgentRow(
                     windowController: controller,
                     tabIndex: index,
@@ -300,8 +306,12 @@ class MissionControlWindow: NSWindowController, NSWindowDelegate, NSTableViewDat
             let tracker = agent.tab.tokenTracker
             return makeLabel("\(formatTokenCount(tracker.currentInput)) ctx / \(formatTokenCount(tracker.totalOutput)) out")
         case "cost":
-            let cost = agent.tab.tokenTracker.estimatedCost
-            let label = makeLabel(String(format: "$%.3f", cost))
+            let tracker = agent.tab.tokenTracker
+            let cost = tracker.estimatedCost
+            let costStr = tracker.creditsUsed > 0
+                ? String(format: "$%.3f (%.2fcr)", cost, tracker.creditsUsed)
+                : String(format: "$%.3f", cost)
+            let label = makeLabel(costStr)
             if cost > 0.5 {
                 (label.subviews.first as? NSTextField)?.textColor = NSColor(red: 1.0, green: 0.6, blue: 0.3, alpha: 1.0)
             }

@@ -335,6 +335,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         wireSplitContainer(splitContainer, tab: tab)
         wireStatusBar(statusBar, tab: tab)
 
+        rootTerminal.isRedactMode = AppConfig.shared.redactMode
+
         return tab
     }
 
@@ -445,7 +447,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         let displayGroups = tabGroups.map { g -> TabGroupDisplayInfo in
             let count = tabs.filter { $0.groupID == g.id }.count
-            return TabGroupDisplayInfo(id: g.id, name: g.name, color: g.color, isCollapsed: g.isCollapsed, tabCount: count)
+            return TabGroupDisplayInfo(id: g.id, name: g.name, color: g.color, isCollapsed: g.isCollapsed, tabCount: count, progressLabel: g.progressLabel)
         }
         tabBar.reloadTabs(tabs: displayTabs, selectedIndex: activeTabIndex, groups: displayGroups)
         markStateDirty()
@@ -891,6 +893,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         deleteGroup(group, closeTabs: true)
     }
 
+    @objc private func showGroupInMissionControl(_ sender: NSMenuItem) {
+        guard let groupID = sender.representedObject as? UUID else { return }
+        MissionControlWindow.show(filterGroupID: groupID)
+    }
+
     @objc private func contextSetGroupColor(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? GroupColorAction else { return }
         action.group.color = action.color
@@ -1091,6 +1098,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         closeGroupItem.representedObject = group
         menu.addItem(closeGroupItem)
 
+        let mcItem = NSMenuItem(title: "Show in Mission Control", action: #selector(showGroupInMissionControl(_:)), keyEquivalent: "")
+        mcItem.target = self
+        mcItem.representedObject = groupID
+        menu.addItem(mcItem)
+
         menu.popUp(positioning: nil, at: location, in: tabBar)
     }
 
@@ -1194,6 +1206,24 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         tabGroups.removeAll { $0.id == group.id }
         reloadTabBar()
+    }
+
+    private func findOrCreatePipelineGroup(sessionId: String, role: String?) -> TabGroup {
+        if let existing = tabGroups.first(where: { $0.pipelineSessionId == sessionId }) {
+            return existing
+        }
+        let group = TabGroup(
+            name: "Pipeline",
+            color: PipelineStage.from(role: role)?.color ?? NSColor(white: 0.4, alpha: 1.0),
+            pipelineSessionId: sessionId,
+            autoCloseOnComplete: AppConfig.shared.tabsPipelineAutoClose
+        )
+        tabGroups.append(group)
+        return group
+    }
+
+    private func closePipelineGroup(_ group: TabGroup) {
+        deleteGroup(group, closeTabs: true)
     }
 
     func addTab(at index: Int, toGroup group: TabGroup) {
@@ -1495,6 +1525,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let state = WindowStateStore.load() else { return }
             self.restoreFromSavedState(state)
         }
+        terminal.onACPLaunchRequested = { [weak self, weak tab] model, dir in
+            guard let self, let tab, model.name == "Kiro" else { return }
+            let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
+            self.startACPSession(tab: tab, kiroPath: kiroPath, cwd: dir)
+        }
 
         terminal.onSessionChanged = { [weak self, weak terminal, weak tab] model, provider, cols, rows in
             guard let self, let terminal, let tab else { return }
@@ -1699,7 +1734,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.screenshotToSession(nil)
         }
         tab.aiSidePanel.onResumeSession = { [weak self, weak tab] sessionId in
-            guard let self, let tab, let cwd = tab.statusBar.currentPath else { return }
+            guard let self, let tab, let cwd = tab.statusBar.currentPath ?? tab.acpProjectPath else { return }
             let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
             self.resumeACPSession(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId)
         }
@@ -1972,6 +2007,17 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let tab = createTabState(isInitialTab: false, model: model, workingDir: dir)
         tabs.append(tab)
         switchToTab(at: tabs.count - 1)
+    }
+
+    // MARK: - Redact Mode
+
+    @objc func toggleRedactMode(_ sender: Any?) {
+        let tab = activeTab
+        let terminal = tab.splitContainer.focusedTerminal
+        terminal.isRedactMode.toggle()
+        tab.statusBar.setRedact(terminal.isRedactMode)
+        terminal.updateCellBuffer()
+        terminal.needsRender = true
     }
 
     // MARK: - AI Side Panel
@@ -2314,7 +2360,13 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
     /// Start an ACP session with kiro-cli at the given path.
     func startACPSession(kiroPath: String, cwd: String) {
-        let tab = activeTab
+        startACPSession(tab: activeTab, kiroPath: kiroPath, cwd: cwd)
+    }
+
+    /// Start an ACP session on a specific tab.
+    func startACPSession(tab: TabState, kiroPath: String, cwd: String) {
+        guard ModelCatalog.find("Kiro") != nil else { return }
+        tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
         tab.subagentTracker.reset()
         let client = ACPClient()
@@ -2334,6 +2386,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     /// Resume an existing ACP session.
     func resumeACPSession(kiroPath: String, cwd: String, sessionId: String) {
         let tab = activeTab
+        tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
         tab.subagentTracker.reset()
         let client = ACPClient()
@@ -2370,17 +2423,17 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         // Launch Kiro in PTY mode via the terminal view
         let terminal = tab.splitContainer.focusedTerminal
         guard let model = ModelCatalog.find("Kiro") else { return }
-        let dir = tab.statusBar.currentPath
-        terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
+        let dir = tab.statusBar.currentPath ?? tab.acpProjectPath
+        terminal.launchSessionDirect(model: model, workingDir: dir)
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
-        client.onTextChunk = { [weak self, weak tab] text in
-            guard let tab else { return }
+        client.onTextChunk = { [weak self, weak tab, weak client] text in
+            guard let tab, let client else { return }
             self?.flashStatusBar(text)
             tab.tokenTracker.updateFromACP(
-                inputChars: tab.acpClient?.totalCharsSent ?? 0,
-                outputChars: tab.acpClient?.totalCharsReceived ?? 0
+                inputChars: client.totalCharsSent,
+                outputChars: client.totalCharsReceived
             )
             tab.aiSidePanel.updateTokenDisplay(
                 input: tab.tokenTracker.currentInput,
@@ -2392,7 +2445,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         client.onTurnEnd = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
-            self.toolCallStack?.clearAll()
+            if let credits = tab.acpClient?.lastTurnCredits, credits > 0 {
+                tab.tokenTracker.addCredits(credits)
+            }
+            if tab.subagentTracker.activeCount == 0 {
+                self.toolCallStack?.clearAll()
+            }
             self.flashStatusBar("ACP: Turn complete")
             tab.tokenTracker.incrementTurns()
             tab.aiSidePanel.updateTokenDisplay(
@@ -2401,7 +2459,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             )
             tab.aiSidePanel.setRewindVisible(true)
             // Save session metadata
-            if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath {
+            if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath ?? tab.acpProjectPath {
                 let info = SessionManager.SessionInfo(
                     id: sid, model: "Kiro", projectPath: cwd,
                     startedAt: tab.sessionStartTime ?? Date(),
@@ -2447,9 +2505,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let tab else { return }
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
-        client.onToolCallStarted = { [weak self] state in
+        client.onToolCallStarted = { [weak self, weak tab] state in
             self?.ensureToolCallStack()
             self?.toolCallStack?.addToolCall(state)
+            tab?.tokenTracker.appendToolCall(state.title)
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
@@ -2471,14 +2530,36 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.showDiffReview(requestId: requestId, path: path, content: content, cwd: cwd)
             }
         }
-        client.onSubagentSpawned = { [weak tab] id, name, role, parentSid, deps in
-            tab?.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
+        client.onSubagentSpawned = { [weak self, weak tab] id, name, role, parentSid, deps in
+            guard let tab else { return }
+            tab.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
+
+            // Auto-group: find or create a pipeline group for this parentSessionId
+            if let self, let sessionId = parentSid {
+                let group = self.findOrCreatePipelineGroup(sessionId: sessionId, role: role)
+                tab.groupID = group.id
+                group.totalStages = tab.subagentTracker.subagents.count
+                if group.color == nil, let stageColor = PipelineStage.from(role: role)?.color {
+                    group.color = stageColor
+                }
+                self.reloadTabBar()
+            }
         }
         client.onSubagentProgress = { [weak tab] id, phase, tokens in
             tab?.subagentTracker.handleProgress(id: id, phase: phase, tokensUsed: tokens)
         }
-        client.onSubagentComplete = { [weak tab] id, tokens in
-            tab?.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
+        client.onSubagentComplete = { [weak self, weak tab] id, tokens in
+            guard let tab else { return }
+            tab.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
+
+            // Update pipeline group progress
+            if let self, let gid = tab.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
+                group.completedStages = tab.subagentTracker.subagents.values.filter { !$0.isActive }.count
+                if group.autoCloseOnComplete && group.completedStages >= group.totalStages && group.totalStages > 0 {
+                    self.closePipelineGroup(group)
+                }
+                self.reloadTabBar()
+            }
         }
         client.onSubagentError = { [weak tab] id, message in
             tab?.subagentTracker.handleError(id: id, message: message)

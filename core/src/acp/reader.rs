@@ -27,6 +27,7 @@ pub enum AcpEvent {
     },
     TurnEnd {
         stop_reason: String,
+        credits_used: Option<f64>,
     },
     Cancelled,
     PermissionRequest {
@@ -187,8 +188,12 @@ fn parse_message(
             "session/cancel" => Some(AcpEvent::Cancelled),
             "session/prompt" => {
                 let r: SessionPromptResult = serde_json::from_value(result).ok()?;
+                if !r.extra.is_empty() {
+                    eprintln!("[ACP] session/prompt extra fields: {:?}", r.extra);
+                }
                 Some(AcpEvent::TurnEnd {
                     stop_reason: r.stop_reason.unwrap_or_default(),
+                    credits_used: r.credits_used,
                 })
             }
             _ => None,
@@ -224,6 +229,7 @@ fn parse_message(
                 }),
                 SessionUpdate::TurnEnd => Some(AcpEvent::TurnEnd {
                     stop_reason: "end_turn".to_string(),
+                    credits_used: None,
                 }),
                 SessionUpdate::SubagentSpawned {
                     subagent_id,

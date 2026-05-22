@@ -89,6 +89,7 @@ extension TerminalView {
             (allow file-read* (literal "\(stagedScript.path)"))
             (allow file-read* (subpath "/usr"))
             (allow file-read* (subpath "/bin"))
+            (allow file-read* (subpath "/opt/homebrew"))
             (allow file-read* (subpath "/Library"))
             (allow file-read* (subpath "/System"))
             (allow file-write* (subpath "/private/tmp"))
@@ -100,7 +101,8 @@ extension TerminalView {
         let stderrPipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-        process.arguments = ["-p", profile, "/bin/bash", "--", stagedScript.path]
+        let hookShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        process.arguments = ["-p", profile, hookShell, "--", stagedScript.path]
         process.currentDirectoryURL = URL(fileURLWithPath: dir)
 
         process.standardOutput = FileHandle.nullDevice

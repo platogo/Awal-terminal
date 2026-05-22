@@ -101,6 +101,8 @@ impl Pty {
                 }
                 std::env::set_var("TERM", "xterm-256color");
                 std::env::set_var("COLORTERM", "truecolor");
+                std::env::set_var("TERM_PROGRAM", "AwalTerminal");
+                std::env::set_var("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
 
                 // Remove Claude Code env vars so nested sessions work
                 std::env::remove_var("CLAUDECODE");
