@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
+use std::os::unix::io::RawFd;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -22,8 +23,8 @@ pub enum AcpState {
 }
 
 pub struct AcpClient {
-    child: Child,
-    stdin: std::io::BufWriter<std::process::ChildStdin>,
+    child: Option<Child>,
+    stdin: std::io::BufWriter<Box<dyn Write + Send>>,
     rx: mpsc::Receiver<AcpEvent>,
     _reader_handle: JoinHandle<()>,
     pending_methods: Arc<Mutex<HashMap<u64, String>>>,
@@ -56,8 +57,8 @@ impl AcpClient {
             Self::spawn_process(kiro_path, cwd, agent, engine, trust_tools, token_path)?;
 
         let mut client = Self {
-            child,
-            stdin,
+            child: Some(child),
+            stdin: std::io::BufWriter::new(Box::new(stdin)),
             rx,
             _reader_handle: reader_handle,
             pending_methods,
@@ -77,6 +78,47 @@ impl AcpClient {
         };
         client.send_initialize()?;
         Ok(client)
+    }
+
+    /// Create an AcpClient that only writes to stdin. Reading is handled externally.
+    pub fn writer_only(stdin_fd: RawFd) -> Result<Self, String> {
+        use std::os::unix::io::FromRawFd;
+        let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
+        let (tx, rx) = mpsc::channel();
+        let pending_methods = Arc::new(Mutex::new(HashMap::new()));
+        let reader_handle = thread::spawn(|| {});
+
+        let mut client = Self {
+            child: None,
+            stdin: std::io::BufWriter::new(Box::new(stdin_file)),
+            rx,
+            _reader_handle: reader_handle,
+            pending_methods,
+            tx,
+            next_id: 0,
+            session_id: None,
+            state: AcpState::Initializing,
+            cwd: String::new(),
+            kiro_path: String::new(),
+            resume_session_id: None,
+            crash_count: 0,
+            max_retries: 0,
+            pgid: 0,
+            engine: None,
+            trust_tools: None,
+            token_path: None,
+        };
+        client.send_initialize()?;
+        Ok(client)
+    }
+
+    /// Feed a line from stdout (called by Swift when it reads a line).
+    pub fn feed_stdout_line(&mut self, line: &str) {
+        use crate::acp::reader::parse_line;
+        if let Some(event) = parse_line(line, &self.pending_methods) {
+            self.handle_state_transition(&event);
+            let _ = self.tx.send(event);
+        }
     }
 
     /// Spawn kiro-cli acp and resume an existing session.
@@ -266,8 +308,10 @@ impl AcpClient {
     /// Attempt to respawn the process after a crash.
     pub fn respawn(&mut self) -> Result<(), String> {
         // Kill existing child if still alive
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(ref mut child) = self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
 
         self.crash_count += 1;
         let (child, stdin, rx, reader_handle, pending_methods, pgid, tx) = Self::spawn_process(
@@ -279,8 +323,8 @@ impl AcpClient {
             self.token_path.as_deref(),
         )?;
 
-        self.child = child;
-        self.stdin = stdin;
+        self.child = Some(child);
+        self.stdin = std::io::BufWriter::new(Box::new(stdin));
         self.rx = rx;
         self._reader_handle = reader_handle;
         self.pending_methods = pending_methods;
@@ -315,7 +359,7 @@ impl AcpClient {
     ) -> Result<
         (
             Child,
-            std::io::BufWriter<std::process::ChildStdin>,
+            std::process::ChildStdin,
             mpsc::Receiver<AcpEvent>,
             JoinHandle<()>,
             Arc<Mutex<HashMap<u64, String>>>,
@@ -391,15 +435,7 @@ impl AcpClient {
             });
         }
 
-        Ok((
-            child,
-            std::io::BufWriter::new(stdin),
-            rx,
-            reader_handle,
-            pending_methods,
-            pgid,
-            tx,
-        ))
+        Ok((child, stdin, rx, reader_handle, pending_methods, pgid, tx))
     }
 
     fn kill_process_group(&mut self) {
@@ -409,8 +445,10 @@ impl AcpClient {
                 libc::killpg(self.pgid, libc::SIGTERM);
             }
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(ref mut child) = self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     fn write_response(&mut self, resp: &JsonRpcResponseOut) -> Result<(), String> {

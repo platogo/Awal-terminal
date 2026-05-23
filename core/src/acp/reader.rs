@@ -96,6 +96,18 @@ fn is_auth_error(code: i64, message: &str) -> bool {
     AUTH_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }
 
+/// Parse a single line of stdout into an AcpEvent.
+pub fn parse_line(
+    line: &str,
+    pending_methods: &std::sync::Mutex<std::collections::HashMap<u64, String>>,
+) -> Option<AcpEvent> {
+    if line.is_empty() {
+        return None;
+    }
+    let msg: RawMessage = serde_json::from_str(line).ok()?;
+    parse_message(msg, pending_methods)
+}
+
 /// Spawn a reader thread that parses JSON-RPC messages from stdout and sends AcpEvents.
 pub fn spawn_reader(
     stdout: ChildStdout,
