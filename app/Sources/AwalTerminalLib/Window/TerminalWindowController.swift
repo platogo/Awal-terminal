@@ -1542,6 +1542,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.sessionStartTime = Date()
             tab.statusBar.resetSession()
             tab.statusBar.update(model: model, provider: provider, cols: cols, rows: rows)
+            tab.statusBar.setSessionMode(tab.acpClient != nil ? "ACP" : "PTY")
             tab.statusBar.setDangerMode(terminal.isDangerMode)
             if let wt = tab.worktreeInfo, !wt.isOriginal {
                 tab.statusBar.setWorktreeIsolated(true)
@@ -2384,6 +2385,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         if client.spawn(kiroPath: acpBinary, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             debugLog("ACP: spawn succeeded")
             tab.acpClient = client
+            tab.statusBar.setSessionMode("ACP")
             acpTimeoutTimer?.cancel()
             let timer = DispatchSource.makeTimerSource(queue: .main)
             timer.schedule(deadline: .now() + 30)
@@ -2420,6 +2422,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let acpBinary = config.resolvedKiroACPBinaryPath
         if client.spawnAndResume(kiroPath: acpBinary, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             tab.acpClient = client
+            tab.statusBar.setSessionMode("ACP")
         } else {
             showACPSpawnError(kiroPath: kiroPath) {
                 self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
@@ -2500,6 +2503,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private func fallbackToPTY(tab: TabState, message: String) {
         tab.acpClient?.destroy()
         tab.acpClient = nil
+        tab.statusBar.setSessionMode("PTY")
         flashStatusBar(message)
         // Launch Kiro in PTY mode via the terminal view
         let terminal = tab.splitContainer.focusedTerminal
