@@ -5,6 +5,11 @@ import Foundation
 class ACPClient {
     private var handle: OpaquePointer?
     private var pollTimer: DispatchSourceTimer?
+    private var process: Process?
+    private var stdinPipe: Pipe?
+    private var stdoutPipe: Pipe?
+    private var stderrPipe: Pipe?
+    private var lineBuffer: String = ""
 
     var onTextChunk: ((String) -> Void)?
     var onTurnEnd: ((String) -> Void)?
@@ -46,49 +51,70 @@ class ACPClient {
     }
 
     func spawn(kiroPath: String, cwd: String, agent: String? = nil, engine: String? = nil, trustTools: String? = nil, tokenPath: String? = nil) -> Bool {
-        let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
-            cwd.withCString { cwdPtr in
-                let call = { (aPtr: UnsafePointer<CChar>?, ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?, tokPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
-                    at_acp_spawn(kiroPtr, cwdPtr, aPtr, ePtr, tPtr, tokPtr)
-                }
-                switch (agent, engine, trustTools, tokenPath) {
-                case let (a?, e?, t?, tok?):
-                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in tok.withCString { tokP in call(aP, eP, tP, tokP) } } } }
-                case let (a?, e?, t?, nil):
-                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in call(aP, eP, tP, nil) } } }
-                case let (a?, e?, nil, tok?):
-                    return a.withCString { aP in e.withCString { eP in tok.withCString { tokP in call(aP, eP, nil, tokP) } } }
-                case let (a?, nil, t?, tok?):
-                    return a.withCString { aP in t.withCString { tP in tok.withCString { tokP in call(aP, nil, tP, tokP) } } }
-                case let (nil, e?, t?, tok?):
-                    return e.withCString { eP in t.withCString { tP in tok.withCString { tokP in call(nil, eP, tP, tokP) } } }
-                case let (a?, e?, nil, nil):
-                    return a.withCString { aP in e.withCString { eP in call(aP, eP, nil, nil) } }
-                case let (a?, nil, t?, nil):
-                    return a.withCString { aP in t.withCString { tP in call(aP, nil, tP, nil) } }
-                case let (a?, nil, nil, tok?):
-                    return a.withCString { aP in tok.withCString { tokP in call(aP, nil, nil, tokP) } }
-                case let (nil, e?, t?, nil):
-                    return e.withCString { eP in t.withCString { tP in call(nil, eP, tP, nil) } }
-                case let (nil, e?, nil, tok?):
-                    return e.withCString { eP in tok.withCString { tokP in call(nil, eP, nil, tokP) } }
-                case let (nil, nil, t?, tok?):
-                    return t.withCString { tP in tok.withCString { tokP in call(nil, nil, tP, tokP) } }
-                case let (a?, nil, nil, nil):
-                    return a.withCString { aP in call(aP, nil, nil, nil) }
-                case let (nil, e?, nil, nil):
-                    return e.withCString { eP in call(nil, eP, nil, nil) }
-                case let (nil, nil, t?, nil):
-                    return t.withCString { tP in call(nil, nil, tP, nil) }
-                case let (nil, nil, nil, tok?):
-                    return tok.withCString { tokP in call(nil, nil, nil, tokP) }
-                case (nil, nil, nil, nil):
-                    return call(nil, nil, nil, nil)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: kiroPath)
+        var args = ["acp"]
+        if let a = agent { args += ["--agent", a] }
+        if let e = engine { args += ["--agent-engine", e] }
+        if let t = trustTools {
+            if t == "all" { args.append("--trust-all-tools") }
+            else { args += ["--trust-tools", t] }
+        }
+        if let tok = tokenPath { args += ["--token-path", tok] }
+        proc.arguments = args
+        proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
+
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardInput = inPipe
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+
+        do { try proc.run() } catch { return false }
+
+        self.process = proc
+        self.stdinPipe = inPipe
+        self.stdoutPipe = outPipe
+        self.stderrPipe = errPipe
+
+        let stdinFd = inPipe.fileHandleForWriting.fileDescriptor
+        guard let h = at_acp_create_writer(stdinFd) else {
+            proc.terminate()
+            return false
+        }
+        handle = h
+
+        // Read stdout in Swift and feed lines to Rust for parsing
+        outPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
+            let data = fh.availableData
+            guard !data.isEmpty, let self, let handle = self.handle else {
+                fh.readabilityHandler = nil
+                return
+            }
+            guard let str = String(data: data, encoding: .utf8) else { return }
+            self.lineBuffer += str
+            while let range = self.lineBuffer.range(of: "\n") {
+                let line = String(self.lineBuffer[self.lineBuffer.startIndex..<range.lowerBound])
+                self.lineBuffer = String(self.lineBuffer[range.upperBound...])
+                if !line.isEmpty {
+                    line.withCString { ptr in at_acp_feed_line(handle, ptr) }
                 }
             }
         }
-        guard let h else { return false }
-        handle = h
+
+        // Read stderr
+        errPipe.fileHandleForReading.readabilityHandler = { fh in
+            let data = fh.availableData
+            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else {
+                fh.readabilityHandler = nil
+                return
+            }
+            for line in str.split(separator: "\n") {
+                debugLog("ACP stderr: \(line)")
+            }
+        }
+
         startPolling()
         return true
     }
@@ -164,6 +190,8 @@ class ACPClient {
     func forceKill() {
         guard let handle else { return }
         at_acp_force_kill(handle)
+        process?.terminate()
+        process = nil
     }
 
     func respondPermission(requestId: UInt64, approved: Bool) {
@@ -197,6 +225,10 @@ class ACPClient {
         pollTimer = nil
         if let handle {
             at_acp_destroy(handle)
+        process?.terminate()
+        process = nil
+        stdoutPipe?.fileHandleForReading.readabilityHandler = nil
+        stderrPipe?.fileHandleForReading.readabilityHandler = nil
             self.handle = nil
         }
     }
