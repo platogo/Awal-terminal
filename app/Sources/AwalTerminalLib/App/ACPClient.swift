@@ -67,6 +67,13 @@ class ACPClient {
         proc.arguments = args
         proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
 
+        // GUI apps don't inherit shell PATH — set explicit environment
+        var env = ProcessInfo.processInfo.environment
+        let binDir = (kiroPath as NSString).deletingLastPathComponent
+        let existing = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        env["PATH"] = "\(binDir):\(existing):/usr/local/bin:/opt/homebrew/bin"
+        proc.environment = env
+
         let inPipe = Pipe()
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -90,7 +97,7 @@ class ACPClient {
         cwd.withCString { ptr in at_acp_set_cwd(h, ptr) }
 
         let outFd = outPipe.fileHandleForReading.fileDescriptor
-        fcntl(outFd, F_SETFL, fcntl(outFd, F_GETFL) | O_NONBLOCK)
+        _ = fcntl(outFd, F_SETFL, fcntl(outFd, F_GETFL) | O_NONBLOCK)
 
         let outSource = DispatchSource.makeReadSource(fileDescriptor: outFd, queue: .main)
         outSource.setEventHandler { [weak self] in
@@ -114,7 +121,7 @@ class ACPClient {
         stdoutSource = outSource
 
         let errFd = errPipe.fileHandleForReading.fileDescriptor
-        fcntl(errFd, F_SETFL, fcntl(errFd, F_GETFL) | O_NONBLOCK)
+        _ = fcntl(errFd, F_SETFL, fcntl(errFd, F_GETFL) | O_NONBLOCK)
 
         let errSource = DispatchSource.makeReadSource(fileDescriptor: errFd, queue: .main)
         errSource.setEventHandler { [weak self] in

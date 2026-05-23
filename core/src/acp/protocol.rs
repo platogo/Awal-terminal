@@ -71,7 +71,7 @@ pub struct ClientInfo {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
     #[allow(dead_code)]
-    pub protocol_version: Option<String>,
+    pub protocol_version: Option<Value>,
     #[allow(dead_code)]
     pub agent_capabilities: Option<Value>,
     #[allow(dead_code)]
