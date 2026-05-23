@@ -9,7 +9,10 @@ class ACPClient {
     private var stdinPipe: Pipe?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
-    private var lineBuffer: String = ""
+    private var lineBuffer = Data()
+    private var readBuf = [UInt8](repeating: 0, count: 8192)
+    private var stdoutSource: DispatchSourceRead?
+    private var stderrSource: DispatchSourceRead?
 
     var onTextChunk: ((String) -> Void)?
     var onTurnEnd: ((String) -> Void)?
@@ -85,33 +88,58 @@ class ACPClient {
         }
         handle = h
 
-        // Read stdout in Swift and feed lines to Rust for parsing
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
-            let data = fh.availableData
-            guard !data.isEmpty, let self, let handle = self.handle else {
-                fh.readabilityHandler = nil
-                return
-            }
-            guard let str = String(data: data, encoding: .utf8) else { return }
-            self.lineBuffer += str
-            while let range = self.lineBuffer.range(of: "\n") {
-                let line = String(self.lineBuffer[self.lineBuffer.startIndex..<range.lowerBound])
-                self.lineBuffer = String(self.lineBuffer[range.upperBound...])
-                if !line.isEmpty {
-                    line.withCString { ptr in at_acp_feed_line(handle, ptr) }
+        let outFd = outPipe.fileHandleForReading.fileDescriptor
+        fcntl(outFd, F_SETFL, fcntl(outFd, F_GETFL) | O_NONBLOCK)
+
+        let outSource = DispatchSource.makeReadSource(fileDescriptor: outFd, queue: .main)
+        outSource.setEventHandler { [weak self] in
+            guard let self, let handle = self.handle else { return }
+            let n = read(outFd, &self.readBuf, self.readBuf.count)
+            if n > 0 {
+                self.lineBuffer.append(contentsOf: self.readBuf[..<n])
+                while let idx = self.lineBuffer.firstIndex(of: 0x0A) {
+                    let lineData = self.lineBuffer[self.lineBuffer.startIndex..<idx]
+                    self.lineBuffer = Data(self.lineBuffer[(idx + 1)...])
+                    if !lineData.isEmpty, let line = String(data: lineData, encoding: .utf8) {
+                        line.withCString { ptr in at_acp_feed_line(handle, ptr) }
+                    }
                 }
+            } else if n == 0 || (n < 0 && errno != EAGAIN) {
+                self.stdoutSource?.cancel()
+                self.stdoutSource = nil
             }
         }
+        outSource.resume()
+        stdoutSource = outSource
 
-        // Read stderr
-        errPipe.fileHandleForReading.readabilityHandler = { fh in
-            let data = fh.availableData
-            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else {
-                fh.readabilityHandler = nil
-                return
+        let errFd = errPipe.fileHandleForReading.fileDescriptor
+        fcntl(errFd, F_SETFL, fcntl(errFd, F_GETFL) | O_NONBLOCK)
+
+        let errSource = DispatchSource.makeReadSource(fileDescriptor: errFd, queue: .main)
+        errSource.setEventHandler { [weak self] in
+            guard let self else { return }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            let n = read(errFd, &buf, buf.count)
+            if n > 0 {
+                if let str = String(bytes: buf[..<n], encoding: .utf8) {
+                    for line in str.split(separator: "\n") {
+                        debugLog("ACP stderr: \(line)")
+                    }
+                }
+            } else if n == 0 || (n < 0 && errno != EAGAIN) {
+                self.stderrSource?.cancel()
+                self.stderrSource = nil
             }
-            for line in str.split(separator: "\n") {
-                debugLog("ACP stderr: \(line)")
+        }
+        errSource.resume()
+        stderrSource = errSource
+
+        proc.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.stdoutSource?.cancel()
+                self?.stdoutSource = nil
+                self?.stderrSource?.cancel()
+                self?.stderrSource = nil
             }
         }
 
@@ -120,36 +148,9 @@ class ACPClient {
     }
 
     func spawnAndResume(kiroPath: String, cwd: String, sessionId: String, engine: String? = nil, trustTools: String? = nil, tokenPath: String? = nil) -> Bool {
-        let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
-            cwd.withCString { cwdPtr in
-                sessionId.withCString { sidPtr in
-                    let call = { (ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?, tokPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
-                        at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr, ePtr, tPtr, tokPtr)
-                    }
-                    switch (engine, trustTools, tokenPath) {
-                    case let (e?, t?, tok?):
-                        return e.withCString { eP in t.withCString { tP in tok.withCString { tokP in call(eP, tP, tokP) } } }
-                    case let (e?, t?, nil):
-                        return e.withCString { eP in t.withCString { tP in call(eP, tP, nil) } }
-                    case let (e?, nil, tok?):
-                        return e.withCString { eP in tok.withCString { tokP in call(eP, nil, tokP) } }
-                    case let (nil, t?, tok?):
-                        return t.withCString { tP in tok.withCString { tokP in call(nil, tP, tokP) } }
-                    case let (e?, nil, nil):
-                        return e.withCString { eP in call(eP, nil, nil) }
-                    case let (nil, t?, nil):
-                        return t.withCString { tP in call(nil, tP, nil) }
-                    case let (nil, nil, tok?):
-                        return tok.withCString { tokP in call(nil, nil, tokP) }
-                    case (nil, nil, nil):
-                        return call(nil, nil, nil)
-                    }
-                }
-            }
-        }
-        guard let h else { return false }
-        handle = h
-        startPolling()
+        guard spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) else { return false }
+        guard let handle else { return false }
+        sessionId.withCString { ptr in at_acp_set_resume_session(handle, ptr) }
         return true
     }
 
@@ -190,6 +191,10 @@ class ACPClient {
     func forceKill() {
         guard let handle else { return }
         at_acp_force_kill(handle)
+        stdoutSource?.cancel()
+        stdoutSource = nil
+        stderrSource?.cancel()
+        stderrSource = nil
         process?.terminate()
         process = nil
     }
@@ -215,20 +220,17 @@ class ACPClient {
         _ = at_acp_respond_fs_write(handle, requestId, success)
     }
 
-    func respawn() -> Bool {
-        guard let handle else { return false }
-        return at_acp_respawn(handle) == 0
-    }
-
     func destroy() {
+        stdoutSource?.cancel()
+        stdoutSource = nil
+        stderrSource?.cancel()
+        stderrSource = nil
         pollTimer?.cancel()
         pollTimer = nil
-        if let handle {
-            at_acp_destroy(handle)
         process?.terminate()
         process = nil
-        stdoutPipe?.fileHandleForReading.readabilityHandler = nil
-        stderrPipe?.fileHandleForReading.readabilityHandler = nil
+        if let handle {
+            at_acp_destroy(handle)
             self.handle = nil
         }
     }
@@ -317,19 +319,8 @@ class ACPClient {
                 if let text { onError?(text) }
             case 7: // ProcessExited
                 isPrompting = false
-                // Check state — Rust handles recovery logic
-                let state = at_acp_get_state(handle)
-                if state == 4 { // Recovering
-                    onRecovering?()
-                    // Trigger respawn
-                    if at_acp_respawn(handle) != 0 {
-                        onRecoveryFailed?()
-                    }
-                } else {
-                    // Dead — max retries exhausted
-                    let code = text.flatMap { Int32($0) }
-                    onProcessExited?(code)
-                }
+                let code = text.flatMap { Int32($0) }
+                onProcessExited?(code)
             case 8: // PermissionRequest
                 if let desc = text, let meta = text2 {
                     let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
