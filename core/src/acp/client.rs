@@ -1,17 +1,15 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::io::RawFd;
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
     JsonRpcResponseOut, SessionCancelParams, SessionCancelSubagentParams, SessionNewParams,
     SessionPromptParams, SessionResumeParams, SessionRewindParams,
 };
-use crate::acp::reader::{spawn_reader, AcpEvent};
+use crate::acp::reader::AcpEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpState {
@@ -23,90 +21,39 @@ pub enum AcpState {
 }
 
 pub struct AcpClient {
-    child: Option<Child>,
     stdin: std::io::BufWriter<Box<dyn Write + Send>>,
     rx: mpsc::Receiver<AcpEvent>,
-    _reader_handle: JoinHandle<()>,
     pending_methods: Arc<Mutex<HashMap<u64, String>>>,
     tx: mpsc::Sender<AcpEvent>,
     next_id: u64,
     session_id: Option<String>,
     state: AcpState,
     cwd: String,
-    kiro_path: String,
     resume_session_id: Option<String>,
     crash_count: u8,
     max_retries: u8,
-    pgid: i32,
-    engine: Option<String>,
-    trust_tools: Option<String>,
-    token_path: Option<String>,
 }
 
 impl AcpClient {
-    /// Spawn kiro-cli acp and begin the initialize handshake.
-    pub fn spawn(
-        kiro_path: &str,
-        cwd: &str,
-        agent: Option<&str>,
-        engine: Option<&str>,
-        trust_tools: Option<&str>,
-        token_path: Option<&str>,
-    ) -> Result<Self, String> {
-        let (child, stdin, rx, reader_handle, pending_methods, pgid, tx) =
-            Self::spawn_process(kiro_path, cwd, agent, engine, trust_tools, token_path)?;
-
-        let mut client = Self {
-            child: Some(child),
-            stdin: std::io::BufWriter::new(Box::new(stdin)),
-            rx,
-            _reader_handle: reader_handle,
-            pending_methods,
-            tx,
-            next_id: 0,
-            session_id: None,
-            state: AcpState::Initializing,
-            cwd: cwd.to_string(),
-            kiro_path: kiro_path.to_string(),
-            resume_session_id: None,
-            crash_count: 0,
-            max_retries: 3,
-            pgid,
-            engine: engine.map(|s| s.to_string()),
-            trust_tools: trust_tools.map(|s| s.to_string()),
-            token_path: token_path.map(|s| s.to_string()),
-        };
-        client.send_initialize()?;
-        Ok(client)
-    }
-
     /// Create an AcpClient that only writes to stdin. Reading is handled externally.
     pub fn writer_only(stdin_fd: RawFd) -> Result<Self, String> {
         use std::os::unix::io::FromRawFd;
         let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
         let (tx, rx) = mpsc::channel();
         let pending_methods = Arc::new(Mutex::new(HashMap::new()));
-        let reader_handle = thread::spawn(|| {});
 
         let mut client = Self {
-            child: None,
             stdin: std::io::BufWriter::new(Box::new(stdin_file)),
             rx,
-            _reader_handle: reader_handle,
             pending_methods,
             tx,
             next_id: 0,
             session_id: None,
             state: AcpState::Initializing,
             cwd: String::new(),
-            kiro_path: String::new(),
             resume_session_id: None,
             crash_count: 0,
             max_retries: 0,
-            pgid: 0,
-            engine: None,
-            trust_tools: None,
-            token_path: None,
         };
         client.send_initialize()?;
         Ok(client)
@@ -121,18 +68,9 @@ impl AcpClient {
         }
     }
 
-    /// Spawn kiro-cli acp and resume an existing session.
-    pub fn spawn_and_resume(
-        kiro_path: &str,
-        cwd: &str,
-        session_id: &str,
-        engine: Option<&str>,
-        trust_tools: Option<&str>,
-        token_path: Option<&str>,
-    ) -> Result<Self, String> {
-        let mut client = Self::spawn(kiro_path, cwd, None, engine, trust_tools, token_path)?;
-        client.resume_session_id = Some(session_id.to_string());
-        Ok(client)
+    /// Set the session ID to resume after initialization completes.
+    pub fn set_resume_session_id(&mut self, session_id: &str) {
+        self.resume_session_id = Some(session_id.to_string());
     }
 
     /// Non-blocking poll for the next event. Returns None if no event is available.
@@ -216,7 +154,7 @@ impl AcpClient {
 
     /// Force-kill the child process (hard termination).
     pub fn force_kill(&mut self) {
-        self.kill();
+        self.state = AcpState::Dead;
     }
 
     /// Get the active session ID.
@@ -305,151 +243,7 @@ impl AcpClient {
         self.write_response(&resp)
     }
 
-    /// Attempt to respawn the process after a crash.
-    pub fn respawn(&mut self) -> Result<(), String> {
-        // Kill existing child if still alive
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-
-        self.crash_count += 1;
-        let (child, stdin, rx, reader_handle, pending_methods, pgid, tx) = Self::spawn_process(
-            &self.kiro_path,
-            &self.cwd,
-            None,
-            self.engine.as_deref(),
-            self.trust_tools.as_deref(),
-            self.token_path.as_deref(),
-        )?;
-
-        self.child = Some(child);
-        self.stdin = std::io::BufWriter::new(Box::new(stdin));
-        self.rx = rx;
-        self._reader_handle = reader_handle;
-        self.pending_methods = pending_methods;
-        self.tx = tx;
-        self.next_id = 0;
-        self.pgid = pgid;
-
-        // Re-initialize — if we have a session_id, resume it after init
-        if let Some(sid) = self.session_id.clone() {
-            self.resume_session_id = Some(sid);
-        }
-        self.send_initialize()?;
-        Ok(())
-    }
-
-    /// Kill the child process.
-    pub fn kill(&mut self) {
-        self.kill_process_group();
-        self.state = AcpState::Dead;
-    }
-
     // --- Private ---
-
-    #[allow(clippy::type_complexity)]
-    fn spawn_process(
-        kiro_path: &str,
-        cwd: &str,
-        agent: Option<&str>,
-        engine: Option<&str>,
-        trust_tools: Option<&str>,
-        token_path: Option<&str>,
-    ) -> Result<
-        (
-            Child,
-            std::process::ChildStdin,
-            mpsc::Receiver<AcpEvent>,
-            JoinHandle<()>,
-            Arc<Mutex<HashMap<u64, String>>>,
-            i32,
-            mpsc::Sender<AcpEvent>,
-        ),
-        String,
-    > {
-        let mut cmd = Command::new(kiro_path);
-        cmd.arg("acp")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .current_dir(cwd);
-
-        if let Some(name) = agent {
-            cmd.args(["--agent", name]);
-        }
-
-        if let Some(eng) = engine {
-            cmd.args(["--agent-engine", eng]);
-        }
-
-        if let Some(tools) = trust_tools {
-            if tools == "all" {
-                cmd.arg("--trust-all-tools");
-            } else {
-                cmd.args(["--trust-tools", tools]);
-            }
-        }
-
-        if let Some(path) = token_path {
-            cmd.args(["--token-path", path]);
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn kiro-cli: {e}"))?;
-
-        let pgid = child.id() as i32;
-
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("Failed to capture stdout".to_string())?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or("Failed to capture stdin".to_string())?;
-        let stderr = child.stderr.take();
-
-        let (tx, rx) = mpsc::channel();
-        let pending_methods = Arc::new(Mutex::new(HashMap::new()));
-        let reader_handle = spawn_reader(stdout, tx.clone(), pending_methods.clone());
-
-        // Spawn stderr reader thread
-        if let Some(stderr) = stderr {
-            let stderr_tx = tx.clone();
-            thread::spawn(move || {
-                let reader = std::io::BufReader::new(stderr);
-                use std::io::BufRead;
-                for line in reader.lines() {
-                    match line {
-                        Ok(l) if !l.is_empty() => {
-                            if stderr_tx.send(AcpEvent::Stderr(l)).is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                        _ => {}
-                    }
-                }
-            });
-        }
-
-        Ok((child, stdin, rx, reader_handle, pending_methods, pgid, tx))
-    }
-
-    fn kill_process_group(&mut self) {
-        // Send SIGTERM to the process group
-        if self.pgid > 0 {
-            unsafe {
-                libc::killpg(self.pgid, libc::SIGTERM);
-            }
-        }
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
 
     fn write_response(&mut self, resp: &JsonRpcResponseOut) -> Result<(), String> {
         let line = serde_json::to_string(resp).map_err(|e| e.to_string())?;
@@ -520,7 +314,7 @@ impl AcpClient {
             AcpEvent::SessionCreated(id) => {
                 self.session_id = Some(id.clone());
                 self.state = AcpState::Ready;
-                self.crash_count = 0; // Reset on successful session
+                self.crash_count = 0;
             }
             AcpEvent::TurnEnd { .. } => {
                 self.state = AcpState::Ready;
@@ -540,11 +334,5 @@ impl AcpClient {
             }
             _ => {}
         }
-    }
-}
-
-impl Drop for AcpClient {
-    fn drop(&mut self) {
-        self.kill_process_group();
     }
 }

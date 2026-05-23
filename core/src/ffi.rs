@@ -958,57 +958,6 @@ fn string_to_c(s: &str) -> *mut c_char {
     CString::new(s).map_or(std::ptr::null_mut(), |cs| cs.into_raw())
 }
 
-/// Spawn kiro-cli acp. Returns opaque handle or null on failure.
-#[no_mangle]
-pub extern "C" fn at_acp_spawn(
-    kiro_path: *const c_char,
-    cwd: *const c_char,
-    agent: *const c_char,
-    engine: *const c_char,
-    trust_tools: *const c_char,
-    token_path: *const c_char,
-) -> *mut ATAcpClient {
-    if kiro_path.is_null() || cwd.is_null() {
-        return std::ptr::null_mut();
-    }
-    let kiro = unsafe { std::ffi::CStr::from_ptr(kiro_path).to_str().unwrap_or("") };
-    let cwd_str = unsafe { std::ffi::CStr::from_ptr(cwd).to_str().unwrap_or("") };
-    let agent_str = if agent.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(agent).to_str().ok() }
-    };
-    let engine_str = if engine.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(engine).to_str().ok() }
-    };
-    let trust_tools_str = if trust_tools.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(trust_tools).to_str().ok() }
-    };
-    let token_path_str = if token_path.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(token_path).to_str().ok() }
-    };
-    match AcpClient::spawn(
-        kiro,
-        cwd_str,
-        agent_str,
-        engine_str,
-        trust_tools_str,
-        token_path_str,
-    ) {
-        Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
-        Err(e) => {
-            eprintln!("at_acp_spawn failed: {e}");
-            std::ptr::null_mut()
-        }
-    }
-}
-
 /// Poll next event. Returns null if no event available.
 /// Caller must free with at_acp_free_event.
 #[no_mangle]
@@ -1257,16 +1206,6 @@ pub extern "C" fn at_acp_get_state(client: *const ATAcpClient) -> u8 {
     }
 }
 
-/// Trigger a manual respawn. Returns 0 on success, -1 on error.
-#[no_mangle]
-pub extern "C" fn at_acp_respawn(client: *mut ATAcpClient) -> i32 {
-    let client = mut_ref_or!(client, -1);
-    match client.0.respawn() {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
-}
-
 /// Free an event returned by at_acp_poll_event.
 #[no_mangle]
 pub extern "C" fn at_acp_free_event(event: *mut ATAcpEvent) {
@@ -1291,53 +1230,6 @@ pub extern "C" fn at_acp_get_session_id(client: *const ATAcpClient) -> *mut c_ch
     match client.0.session_id() {
         Some(id) => string_to_c(id),
         None => std::ptr::null_mut(),
-    }
-}
-
-/// Spawn kiro-cli acp and resume an existing session. Returns opaque handle or null on failure.
-#[no_mangle]
-pub extern "C" fn at_acp_spawn_resume(
-    kiro_path: *const c_char,
-    cwd: *const c_char,
-    session_id: *const c_char,
-    engine: *const c_char,
-    trust_tools: *const c_char,
-    token_path: *const c_char,
-) -> *mut ATAcpClient {
-    if kiro_path.is_null() || cwd.is_null() || session_id.is_null() {
-        return std::ptr::null_mut();
-    }
-    let kiro = unsafe { std::ffi::CStr::from_ptr(kiro_path).to_str().unwrap_or("") };
-    let cwd_str = unsafe { std::ffi::CStr::from_ptr(cwd).to_str().unwrap_or("") };
-    let sid = unsafe { std::ffi::CStr::from_ptr(session_id).to_str().unwrap_or("") };
-    let engine_str = if engine.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(engine).to_str().ok() }
-    };
-    let trust_tools_str = if trust_tools.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(trust_tools).to_str().ok() }
-    };
-    let token_path_str = if token_path.is_null() {
-        None
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(token_path).to_str().ok() }
-    };
-    match AcpClient::spawn_and_resume(
-        kiro,
-        cwd_str,
-        sid,
-        engine_str,
-        trust_tools_str,
-        token_path_str,
-    ) {
-        Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
-        Err(e) => {
-            eprintln!("at_acp_spawn_resume failed: {e}");
-            std::ptr::null_mut()
-        }
     }
 }
 
@@ -1370,6 +1262,17 @@ pub extern "C" fn at_acp_feed_line(client: *mut ATAcpClient, line: *const c_char
     }
     let line_str = unsafe { std::ffi::CStr::from_ptr(line).to_str().unwrap_or("") };
     client.0.feed_stdout_line(line_str);
+}
+
+/// Set the session ID to resume after initialization.
+#[no_mangle]
+pub extern "C" fn at_acp_set_resume_session(client: *mut ATAcpClient, session_id: *const c_char) {
+    let client = mut_ref_or!(client);
+    if session_id.is_null() {
+        return;
+    }
+    let sid = unsafe { std::ffi::CStr::from_ptr(session_id).to_str().unwrap_or("") };
+    client.0.set_resume_session_id(sid);
 }
 
 /// Destroy the ACP client (kills child process).

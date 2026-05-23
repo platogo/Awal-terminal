@@ -463,16 +463,6 @@ void at_surface_analyze(struct ATSurface *surface);
 char *at_surface_get_input_line(const struct ATSurface *surface);
 
 /**
- * Spawn kiro-cli acp. Returns opaque handle or null on failure.
- */
-struct ATAcpClient *at_acp_spawn(const char *kiro_path,
-                                 const char *cwd,
-                                 const char *agent,
-                                 const char *engine,
-                                 const char *trust_tools,
-                                 const char *token_path);
-
-/**
  * Poll next event. Returns null if no event available.
  * Caller must free with at_acp_free_event.
  */
@@ -527,11 +517,6 @@ int32_t at_acp_respond_fs_write(struct ATAcpClient *client,
 uint8_t at_acp_get_state(const struct ATAcpClient *client);
 
 /**
- * Trigger a manual respawn. Returns 0 on success, -1 on error.
- */
-int32_t at_acp_respawn(struct ATAcpClient *client);
-
-/**
  * Free an event returned by at_acp_poll_event.
  */
 void at_acp_free_event(struct ATAcpEvent *event);
@@ -540,16 +525,6 @@ void at_acp_free_event(struct ATAcpEvent *event);
  * Get the active session ID. Returns null if no session. Caller must free with `at_free_string`.
  */
 char *at_acp_get_session_id(const struct ATAcpClient *client);
-
-/**
- * Spawn kiro-cli acp and resume an existing session. Returns opaque handle or null on failure.
- */
-struct ATAcpClient *at_acp_spawn_resume(const char *kiro_path,
-                                        const char *cwd,
-                                        const char *session_id,
-                                        const char *engine,
-                                        const char *trust_tools,
-                                        const char *token_path);
 
 /**
  * Force-kill the ACP child process (hard termination, no graceful cancel).
@@ -567,6 +542,12 @@ struct ATAcpClient *at_acp_create_writer(int32_t stdin_fd);
  */
 void at_acp_feed_line(struct ATAcpClient *client,
                       const char *line);
+
+/**
+ * Set the session ID to resume after initialization.
+ */
+void at_acp_set_resume_session(struct ATAcpClient *client,
+                               const char *session_id);
 
 /**
  * Destroy the ACP client (kills child process).
