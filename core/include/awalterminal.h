@@ -557,6 +557,18 @@ struct ATAcpClient *at_acp_spawn_resume(const char *kiro_path,
 void at_acp_force_kill(struct ATAcpClient *client);
 
 /**
+ * Create an ACP client that only writes to stdin (reading handled by caller).
+ * Returns opaque handle or null on failure.
+ */
+struct ATAcpClient *at_acp_create_writer(int32_t stdin_fd);
+
+/**
+ * Feed a line of stdout to the ACP client for JSON-RPC parsing.
+ */
+void at_acp_feed_line(struct ATAcpClient *client,
+                      const char *line);
+
+/**
  * Destroy the ACP client (kills child process).
  */
 void at_acp_destroy(struct ATAcpClient *client);

@@ -1348,6 +1348,30 @@ pub extern "C" fn at_acp_force_kill(client: *mut ATAcpClient) {
     client.0.force_kill();
 }
 
+/// Create an ACP client that only writes to stdin (reading handled by caller).
+/// Returns opaque handle or null on failure.
+#[no_mangle]
+pub extern "C" fn at_acp_create_writer(stdin_fd: i32) -> *mut ATAcpClient {
+    match AcpClient::writer_only(stdin_fd as RawFd) {
+        Ok(client) => Box::into_raw(Box::new(ATAcpClient(client))),
+        Err(e) => {
+            eprintln!("at_acp_create_writer failed: {e}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Feed a line of stdout to the ACP client for JSON-RPC parsing.
+#[no_mangle]
+pub extern "C" fn at_acp_feed_line(client: *mut ATAcpClient, line: *const c_char) {
+    let client = mut_ref_or!(client);
+    if line.is_null() {
+        return;
+    }
+    let line_str = unsafe { std::ffi::CStr::from_ptr(line).to_str().unwrap_or("") };
+    client.0.feed_stdout_line(line_str);
+}
+
 /// Destroy the ACP client (kills child process).
 #[no_mangle]
 pub extern "C" fn at_acp_destroy(client: *mut ATAcpClient) {
