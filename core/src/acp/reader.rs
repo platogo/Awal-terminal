@@ -1,9 +1,3 @@
-use std::io::BufRead;
-use std::io::BufReader;
-use std::process::ChildStdout;
-use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
-
 use crate::acp::protocol::{
     InitializeResult, RawMessage, RequestPermissionParams, SessionNewResult, SessionPromptResult,
     SessionUpdate, SessionUpdateParams,
@@ -106,55 +100,6 @@ pub fn parse_line(
     }
     let msg: RawMessage = serde_json::from_str(line).ok()?;
     parse_message(msg, pending_methods)
-}
-
-/// Spawn a reader thread that parses JSON-RPC messages from stdout and sends AcpEvents.
-pub fn spawn_reader(
-    stdout: ChildStdout,
-    tx: mpsc::Sender<AcpEvent>,
-    pending_methods: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u64, String>>>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-            if line.is_empty() {
-                continue;
-            }
-            let msg: RawMessage = match serde_json::from_str(&line) {
-                Ok(m) => m,
-                Err(e) => {
-                    let _ = tx.send(AcpEvent::Error(format!("Parse error: {e}")));
-                    continue;
-                }
-            };
-            let event = parse_message(msg, &pending_methods);
-            if let Some(ev) = event {
-                // Emit protocol log for received messages
-                let log_label = match &ev {
-                    AcpEvent::Initialized => Some("← initialize"),
-                    AcpEvent::SessionCreated(_) => Some("← session/new"),
-                    AcpEvent::TurnEnd { .. } => Some("← session/prompt"),
-                    AcpEvent::Cancelled => Some("← session/cancel"),
-                    AcpEvent::PermissionRequest { .. } => Some("← session/request_permission"),
-                    AcpEvent::AuthRequired(_) => Some("← auth_error"),
-                    AcpEvent::FsReadRequest { .. } => Some("← fs/read_text_file"),
-                    AcpEvent::FsWriteRequest { .. } => Some("← fs/write_text_file"),
-                    _ => None,
-                };
-                if let Some(label) = log_label {
-                    let _ = tx.send(AcpEvent::ProtocolLog(label.to_string()));
-                }
-                if tx.send(ev).is_err() {
-                    break;
-                }
-            }
-        }
-        let _ = tx.send(AcpEvent::ProcessExited(None));
-    })
 }
 
 fn parse_message(
