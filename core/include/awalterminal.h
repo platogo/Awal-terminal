@@ -550,6 +550,12 @@ void at_acp_set_resume_session(struct ATAcpClient *client,
                                const char *session_id);
 
 /**
+ * Set the working directory for session/new and session/resume requests.
+ */
+void at_acp_set_cwd(struct ATAcpClient *client,
+                    const char *cwd);
+
+/**
  * Destroy the ACP client (kills child process).
  */
 void at_acp_destroy(struct ATAcpClient *client);

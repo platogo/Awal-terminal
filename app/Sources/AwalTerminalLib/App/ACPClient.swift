@@ -81,12 +81,13 @@ class ACPClient {
         self.stdoutPipe = outPipe
         self.stderrPipe = errPipe
 
-        let stdinFd = inPipe.fileHandleForWriting.fileDescriptor
-        guard let h = at_acp_create_writer(stdinFd) else {
+        let stdinFd = dup(inPipe.fileHandleForWriting.fileDescriptor)
+        guard stdinFd >= 0, let h = at_acp_create_writer(stdinFd) else {
             proc.terminate()
             return false
         }
         handle = h
+        cwd.withCString { ptr in at_acp_set_cwd(h, ptr) }
 
         let outFd = outPipe.fileHandleForReading.fileDescriptor
         fcntl(outFd, F_SETFL, fcntl(outFd, F_GETFL) | O_NONBLOCK)
@@ -134,12 +135,13 @@ class ACPClient {
         errSource.resume()
         stderrSource = errSource
 
-        proc.terminationHandler = { [weak self] _ in
+        proc.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
                 self?.stdoutSource?.cancel()
                 self?.stdoutSource = nil
                 self?.stderrSource?.cancel()
                 self?.stderrSource = nil
+                self?.onProcessExited?(proc.terminationStatus)
             }
         }
 

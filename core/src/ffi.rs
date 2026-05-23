@@ -1275,6 +1275,17 @@ pub extern "C" fn at_acp_set_resume_session(client: *mut ATAcpClient, session_id
     client.0.set_resume_session_id(sid);
 }
 
+/// Set the working directory for session/new and session/resume requests.
+#[no_mangle]
+pub extern "C" fn at_acp_set_cwd(client: *mut ATAcpClient, cwd: *const c_char) {
+    let client = mut_ref_or!(client);
+    if cwd.is_null() {
+        return;
+    }
+    let cwd_str = unsafe { std::ffi::CStr::from_ptr(cwd).to_str().unwrap_or("") };
+    client.0.set_cwd(cwd_str);
+}
+
 /// Destroy the ACP client (kills child process).
 #[no_mangle]
 pub extern "C" fn at_acp_destroy(client: *mut ATAcpClient) {

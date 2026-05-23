@@ -73,15 +73,15 @@ impl AcpClient {
         self.resume_session_id = Some(session_id.to_string());
     }
 
+    /// Set the working directory (sent in session/new and session/resume requests).
+    pub fn set_cwd(&mut self, cwd: &str) {
+        self.cwd = cwd.to_string();
+    }
+
     /// Non-blocking poll for the next event. Returns None if no event is available.
+    /// State transitions happen in feed_stdout_line, not here — poll only delivers events to Swift.
     pub fn poll_event(&mut self) -> Option<AcpEvent> {
-        match self.rx.try_recv() {
-            Ok(event) => {
-                self.handle_state_transition(&event);
-                Some(event)
-            }
-            Err(_) => None,
-        }
+        self.rx.try_recv().ok()
     }
 
     /// Current client state.
