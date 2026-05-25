@@ -209,6 +209,16 @@ pub struct RequestPermissionParams {
     pub kind: Option<String>,
 }
 
+// --- JSON-RPC notification (outgoing) ---
+
+#[derive(Serialize)]
+pub struct JsonRpcNotificationOut {
+    pub jsonrpc: &'static str,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
+}
+
 // --- JSON-RPC response (outgoing) ---
 
 #[derive(Serialize)]

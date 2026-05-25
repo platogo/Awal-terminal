@@ -1,6 +1,6 @@
 use crate::acp::protocol::{
     ContentBlock, InitializeResult, PromptResponseWithCredits, RawMessage, RequestPermissionParams,
-    SessionNewResult, SessionUpdate, SessionUpdateParams, ToolCallStatus,
+    SessionNewResult, SessionUpdate, SessionUpdateParams, StopReason, ToolCallStatus,
 };
 
 fn serde_str<T: serde::Serialize>(value: &T) -> String {
@@ -211,7 +211,7 @@ fn parse_message(
                 };
                 Some(AcpEvent::SessionCreated(r.session_id))
             }
-            "session/cancel" => Some(AcpEvent::Cancelled),
+            "session/cancel" => None, // Ignore legacy cancel responses
             "session/prompt" => {
 let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     Ok(r) => r,
@@ -222,6 +222,9 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                         )));
                     }
                 };
+                if r.stop_reason == StopReason::Cancelled {
+                    return Some(AcpEvent::Cancelled);
+                }
                 Some(AcpEvent::TurnEnd {
                     stop_reason: serde_str(&r.stop_reason),
                     credits_used: r.credits_used,
@@ -454,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_session_cancel_response() {
+    fn parse_session_cancel_response_ignored() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         pending
             .lock()
@@ -463,8 +466,8 @@ mod tests {
 
         let msg: RawMessage =
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":4,"result":{}}"#).unwrap();
-        let event = parse_message(msg, &pending).unwrap();
-        assert!(matches!(event, AcpEvent::Cancelled));
+        let event = parse_message(msg, &pending);
+        assert!(event.is_none());
     }
 
     #[test]
@@ -704,5 +707,20 @@ mod tests {
             }
             _ => panic!("expected ImageContent"),
         }
+    }
+
+    #[test]
+    fn parse_prompt_response_cancelled_emits_cancelled_event() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(5, "session/prompt".to_string());
+
+        let msg: RawMessage =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":5,"result":{"stopReason":"cancelled"}}"#)
+                .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        assert!(matches!(event, AcpEvent::Cancelled));
     }
 }
