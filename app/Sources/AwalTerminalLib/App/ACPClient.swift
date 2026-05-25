@@ -5,6 +5,14 @@ import Foundation
 class ACPClient {
     private var handle: OpaquePointer?
     private var pollTimer: DispatchSourceTimer?
+    private var process: Process?
+    private var stdinPipe: Pipe?
+    private var stdoutPipe: Pipe?
+    private var stderrPipe: Pipe?
+    private var lineBuffer = Data()
+    private var readBuf = [UInt8](repeating: 0, count: 8192)
+    private var stdoutSource: DispatchSourceRead?
+    private var stderrSource: DispatchSourceRead?
 
     var onTextChunk: ((String) -> Void)?
     var onTurnEnd: ((String) -> Void)?
@@ -45,61 +53,114 @@ class ACPClient {
         let kind: ToolCallKind
     }
 
-    func spawn(kiroPath: String, cwd: String, agent: String? = nil, engine: String? = nil, trustTools: String? = nil) -> Bool {
-        let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
-            cwd.withCString { cwdPtr in
-                let call = { (aPtr: UnsafePointer<CChar>?, ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
-                    at_acp_spawn(kiroPtr, cwdPtr, aPtr, ePtr, tPtr)
+    func spawn(kiroPath: String, cwd: String, agent: String? = nil, engine: String? = nil, trustTools: String? = nil, tokenPath: String? = nil) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: kiroPath)
+        var args = ["acp"]
+        if let a = agent { args += ["--agent", a] }
+        if let e = engine { args += ["--agent-engine", e] }
+        if let t = trustTools {
+            if t == "all" { args.append("--trust-all-tools") }
+            else { args += ["--trust-tools", t] }
+        }
+        if let tok = tokenPath { args += ["--token-path", tok] }
+        proc.arguments = args
+        proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
+
+        // GUI apps don't inherit shell PATH — set explicit environment
+        var env = ProcessInfo.processInfo.environment
+        let binDir = (kiroPath as NSString).deletingLastPathComponent
+        let existing = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        env["PATH"] = "\(binDir):\(existing):/usr/local/bin:/opt/homebrew/bin"
+        proc.environment = env
+
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardInput = inPipe
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+
+        do { try proc.run() } catch { return false }
+
+        self.process = proc
+        self.stdinPipe = inPipe
+        self.stdoutPipe = outPipe
+        self.stderrPipe = errPipe
+
+        let stdinFd = dup(inPipe.fileHandleForWriting.fileDescriptor)
+        guard stdinFd >= 0, let h = at_acp_create_writer(stdinFd) else {
+            if stdinFd >= 0 { close(stdinFd) }
+            proc.terminate()
+            return false
+        }
+        handle = h
+        cwd.withCString { ptr in at_acp_set_cwd(h, ptr) }
+
+        let outFd = outPipe.fileHandleForReading.fileDescriptor
+        _ = fcntl(outFd, F_SETFL, fcntl(outFd, F_GETFL) | O_NONBLOCK)
+
+        let outSource = DispatchSource.makeReadSource(fileDescriptor: outFd, queue: .main)
+        outSource.setEventHandler { [weak self] in
+            guard let self, let handle = self.handle else { return }
+            let n = read(outFd, &self.readBuf, self.readBuf.count)
+            if n > 0 {
+                self.lineBuffer.append(contentsOf: self.readBuf[..<n])
+                while let idx = self.lineBuffer.firstIndex(of: 0x0A) {
+                    let lineData = self.lineBuffer[self.lineBuffer.startIndex..<idx]
+                    self.lineBuffer = Data(self.lineBuffer[(idx + 1)...])
+                    if !lineData.isEmpty, let line = String(data: lineData, encoding: .utf8) {
+                        line.withCString { ptr in at_acp_feed_line(handle, ptr) }
+                    }
                 }
-                switch (agent, engine, trustTools) {
-                case let (a?, e?, t?):
-                    return a.withCString { aP in e.withCString { eP in t.withCString { tP in call(aP, eP, tP) } } }
-                case let (a?, e?, nil):
-                    return a.withCString { aP in e.withCString { eP in call(aP, eP, nil) } }
-                case let (a?, nil, t?):
-                    return a.withCString { aP in t.withCString { tP in call(aP, nil, tP) } }
-                case let (nil, e?, t?):
-                    return e.withCString { eP in t.withCString { tP in call(nil, eP, tP) } }
-                case let (a?, nil, nil):
-                    return a.withCString { aP in call(aP, nil, nil) }
-                case let (nil, e?, nil):
-                    return e.withCString { eP in call(nil, eP, nil) }
-                case let (nil, nil, t?):
-                    return t.withCString { tP in call(nil, nil, tP) }
-                case (nil, nil, nil):
-                    return call(nil, nil, nil)
-                }
+            } else if n == 0 || (n < 0 && errno != EAGAIN) {
+                self.stdoutSource?.cancel()
+                self.stdoutSource = nil
             }
         }
-        guard let h else { return false }
-        handle = h
+        outSource.resume()
+        stdoutSource = outSource
+
+        let errFd = errPipe.fileHandleForReading.fileDescriptor
+        _ = fcntl(errFd, F_SETFL, fcntl(errFd, F_GETFL) | O_NONBLOCK)
+
+        let errSource = DispatchSource.makeReadSource(fileDescriptor: errFd, queue: .main)
+        errSource.setEventHandler { [weak self] in
+            guard let self else { return }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            let n = read(errFd, &buf, buf.count)
+            if n > 0 {
+                if let str = String(bytes: buf[..<n], encoding: .utf8) {
+                    for line in str.split(separator: "\n") {
+                        debugLog("ACP stderr: \(line)")
+                    }
+                }
+            } else if n == 0 || (n < 0 && errno != EAGAIN) {
+                self.stderrSource?.cancel()
+                self.stderrSource = nil
+            }
+        }
+        errSource.resume()
+        stderrSource = errSource
+
+        proc.terminationHandler = { [weak self] proc in
+            DispatchQueue.main.async {
+                self?.stdoutSource?.cancel()
+                self?.stdoutSource = nil
+                self?.stderrSource?.cancel()
+                self?.stderrSource = nil
+                self?.onProcessExited?(proc.terminationStatus)
+            }
+        }
+
         startPolling()
         return true
     }
 
-    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String, engine: String? = nil, trustTools: String? = nil) -> Bool {
-        let h: OpaquePointer? = kiroPath.withCString { kiroPtr in
-            cwd.withCString { cwdPtr in
-                sessionId.withCString { sidPtr in
-                    let call = { (ePtr: UnsafePointer<CChar>?, tPtr: UnsafePointer<CChar>?) -> OpaquePointer? in
-                        at_acp_spawn_resume(kiroPtr, cwdPtr, sidPtr, ePtr, tPtr)
-                    }
-                    switch (engine, trustTools) {
-                    case let (e?, t?):
-                        return e.withCString { eP in t.withCString { tP in call(eP, tP) } }
-                    case let (e?, nil):
-                        return e.withCString { eP in call(eP, nil) }
-                    case let (nil, t?):
-                        return t.withCString { tP in call(nil, tP) }
-                    case (nil, nil):
-                        return call(nil, nil)
-                    }
-                }
-            }
-        }
-        guard let h else { return false }
-        handle = h
-        startPolling()
+    func spawnAndResume(kiroPath: String, cwd: String, sessionId: String, engine: String? = nil, trustTools: String? = nil, tokenPath: String? = nil) -> Bool {
+        guard spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) else { return false }
+        guard let handle else { return false }
+        sessionId.withCString { ptr in at_acp_set_resume_session(handle, ptr) }
         return true
     }
 
@@ -140,6 +201,12 @@ class ACPClient {
     func forceKill() {
         guard let handle else { return }
         at_acp_force_kill(handle)
+        stdoutSource?.cancel()
+        stdoutSource = nil
+        stderrSource?.cancel()
+        stderrSource = nil
+        process?.terminate()
+        process = nil
     }
 
     func respondPermission(requestId: UInt64, approved: Bool) {
@@ -163,14 +230,15 @@ class ACPClient {
         _ = at_acp_respond_fs_write(handle, requestId, success)
     }
 
-    func respawn() -> Bool {
-        guard let handle else { return false }
-        return at_acp_respawn(handle) == 0
-    }
-
     func destroy() {
+        stdoutSource?.cancel()
+        stdoutSource = nil
+        stderrSource?.cancel()
+        stderrSource = nil
         pollTimer?.cancel()
         pollTimer = nil
+        process?.terminate()
+        process = nil
         if let handle {
             at_acp_destroy(handle)
             self.handle = nil
@@ -261,19 +329,8 @@ class ACPClient {
                 if let text { onError?(text) }
             case 7: // ProcessExited
                 isPrompting = false
-                // Check state — Rust handles recovery logic
-                let state = at_acp_get_state(handle)
-                if state == 4 { // Recovering
-                    onRecovering?()
-                    // Trigger respawn
-                    if at_acp_respawn(handle) != 0 {
-                        onRecoveryFailed?()
-                    }
-                } else {
-                    // Dead — max retries exhausted
-                    let code = text.flatMap { Int32($0) }
-                    onProcessExited?(code)
-                }
+                let code = text.flatMap { Int32($0) }
+                onProcessExited?(code)
             case 8: // PermissionRequest
                 if let desc = text, let meta = text2 {
                     let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
@@ -341,6 +398,14 @@ class ACPClient {
                 if let message = text, let subId = text2 {
                     onSubagentError?(subId, message)
                 }
+            case 17: // Stderr
+                if let text {
+                    debugLog("ACP stderr: \(text)")
+                }
+            case 18: // ProtocolLog
+                if let text {
+                    debugLog("ACP protocol: \(text)")
+                }
             default:
                 break
             }
@@ -369,7 +434,14 @@ class ACPClient {
     /// Auto-approve file reads — read the file and respond immediately.
     private func handleFsRead(requestId: UInt64, path: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let content = try? String(contentsOfFile: path, encoding: .utf8)
+            let maxSize: UInt64 = 10 * 1024 * 1024 // 10MB
+            let content: String?
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let size = attrs[.size] as? UInt64, size > maxSize {
+                content = nil // Too large — respond with error
+            } else {
+                content = try? String(contentsOfFile: path, encoding: .utf8)
+            }
             DispatchQueue.main.async {
                 self?.respondFsRead(requestId: requestId, content: content)
             }

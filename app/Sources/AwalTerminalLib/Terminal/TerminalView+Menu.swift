@@ -635,8 +635,12 @@ extension TerminalView {
         }
 
         // Route to ACP mode if the model prefers it
-        if model.prefersACP, commandOverride == nil, let callback = onACPLaunchRequested {
-            callback(model, workingDir)
+        debugLog("ACP: checking prefersACP=\(model.prefersACP), workingDir=\(workingDir ?? "nil")")
+        if model.prefersACP, commandOverride == nil, let dir = workingDir, let callback = onACPLaunchRequested {
+            debugLog("ACP: routing to ACP mode for \(model.name)")
+            loadingMessageText = "Connecting to Kiro…"
+            // Keep isWaitingForOutput = true so the spinner stays visible
+            callback(model, dir)
             onSessionChanged?(model.name, model.provider, Int(termCols), Int(termRows))
             return
         }
@@ -659,8 +663,9 @@ extension TerminalView {
             }
             // Route to ACP if available
             if commandOverride == nil, let dir = workingDir, let callback = onACPLaunchRequested {
-                isWaitingForOutput = false
-                loadingMessageText = ""
+                debugLog("ACP: Kiro-specific ACP route")
+                loadingMessageText = "Connecting to Kiro…"
+                // Keep isWaitingForOutput = true so the spinner stays visible
                 callback(model, dir)
                 return
             }

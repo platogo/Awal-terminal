@@ -22,6 +22,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var periodicSaveTimer: Timer?
     private var toolCallStack: ToolCallStackView?
     private var pendingFsWrites: [UInt64: (path: String, content: String)] = [:]
+    private var acpTimeoutTimer: DispatchSourceTimer?
 
     /// Exposed for keyboard shortcut interception from TerminalView.
     var toolCallStackForPermissions: ToolCallStackView? { toolCallStack }
@@ -1541,6 +1542,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.sessionStartTime = Date()
             tab.statusBar.resetSession()
             tab.statusBar.update(model: model, provider: provider, cols: cols, rows: rows)
+            tab.statusBar.setSessionMode(tab.acpClient != nil ? "ACP" : "PTY")
             tab.statusBar.setDangerMode(terminal.isDangerMode)
             if let wt = tab.worktreeInfo, !wt.isOriginal {
                 tab.statusBar.setWorktreeIsolated(true)
@@ -1660,13 +1662,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.reloadTabBar()
         }
 
-        terminal.onACPLaunchRequested = { [weak self, weak tab] model, workingDir in
-            guard let self, let tab else { return }
-            let config = AppConfig.shared
-            let kiroPath = config.kiroBinaryPath ?? "kiro-cli"
-            let cwd = workingDir ?? tab.statusBar.currentPath ?? FileManager.default.currentDirectoryPath
-            self.startACPSession(kiroPath: kiroPath, cwd: cwd)
-        }
+
 
         // Show AWAKE badge if sleep prevention is already active globally
         let globallyAwake = TerminalWindowTracker.shared.allControllers.contains { c in
@@ -2365,6 +2361,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
     /// Start an ACP session on a specific tab.
     func startACPSession(tab: TabState, kiroPath: String, cwd: String) {
+        debugLog("ACP: startACPSession kiroPath=\(kiroPath) cwd=\(cwd)")
         guard ModelCatalog.find("Kiro") != nil else { return }
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
@@ -2376,10 +2373,29 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let trustTools: String? = config.kiroTrustLevel == .all
             ? "all"
             : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
-        if client.spawn(kiroPath: kiroPath, cwd: cwd, engine: engine, trustTools: trustTools) {
+        let tokenPath = config.resolvedKiroTokenPath
+        let acpBinary = config.resolvedKiroACPBinaryPath
+        debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") trust=\(trustTools ?? "safe") token=\(tokenPath ?? "nil")")
+        if client.spawn(kiroPath: acpBinary, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+            debugLog("ACP: spawn succeeded")
             tab.acpClient = client
+            tab.statusBar.setSessionMode("ACP")
+            acpTimeoutTimer?.cancel()
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + 30)
+            timer.setEventHandler { [weak self, weak tab] in
+                guard let self, let tab else { return }
+                debugLog("ACP: initialization timeout (30s)")
+                self.acpTimeoutTimer = nil
+                self.fallbackToPTY(tab: tab, message: "ACP: Connection timed out — switching to PTY mode")
+            }
+            timer.resume()
+            acpTimeoutTimer = timer
         } else {
-            fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
+            debugLog("ACP: spawn FAILED")
+            showACPSpawnError(binaryPath: acpBinary) {
+                self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
+            }
         }
     }
 
@@ -2396,10 +2412,72 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let trustTools: String? = config.kiroTrustLevel == .all
             ? "all"
             : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
-        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools) {
+        let tokenPath = config.resolvedKiroTokenPath
+        let acpBinary = config.resolvedKiroACPBinaryPath
+        if client.spawnAndResume(kiroPath: acpBinary, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             tab.acpClient = client
+            tab.statusBar.setSessionMode("ACP")
         } else {
-            flashStatusBar("ACP: Failed to resume session")
+            showACPSpawnError(binaryPath: acpBinary) {
+                self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
+            }
+        }
+    }
+
+    private func showACPSpawnError(binaryPath: String, completion: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "ACP Failed to Start"
+        alert.informativeText = """
+            Could not launch kiro-cli at: \(binaryPath)
+
+            macOS GUI apps don't inherit your shell's PATH, so bare command names won't resolve.
+
+            Fix: click "Locate kiro-cli…" to select the binary, or set it manually in ~/.config/awal/config.toml:
+
+            [kiro]
+            binary_path = "/Users/YOU/.local/bin/kiro-cli"
+            """
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Locate kiro-cli…")
+
+        let handler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertSecondButtonReturn else {
+                completion()
+                return
+            }
+            self?.promptForKiroBinary(completion: completion)
+        }
+
+        if let window = window {
+            alert.beginSheetModal(for: window, completionHandler: handler)
+        } else {
+            let response = alert.runModal()
+            handler(response)
+        }
+    }
+
+    private func promptForKiroBinary(completion: @escaping () -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select the kiro-cli binary"
+
+        let localBin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin")
+        if FileManager.default.fileExists(atPath: localBin.path) {
+            panel.directoryURL = localBin
+        }
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else {
+                completion()
+                return
+            }
+            let path = url.path
+            ConfigWriter.updateValue(key: "kiro.binary_path", value: "\"\(path)\"")
+            AppConfig.reload()
+            completion()
         }
     }
 
@@ -2419,17 +2497,19 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private func fallbackToPTY(tab: TabState, message: String) {
         tab.acpClient?.destroy()
         tab.acpClient = nil
+        tab.statusBar.setSessionMode("PTY")
         flashStatusBar(message)
         // Launch Kiro in PTY mode via the terminal view
         let terminal = tab.splitContainer.focusedTerminal
         guard let model = ModelCatalog.find("Kiro") else { return }
         let dir = tab.statusBar.currentPath ?? tab.acpProjectPath
-        terminal.launchSessionDirect(model: model, workingDir: dir)
+        terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
         client.onTextChunk = { [weak self, weak tab, weak client] text in
             guard let tab, let client else { return }
+            debugLog("ACP: text chunk: \(text)")
             self?.flashStatusBar(text)
             tab.tokenTracker.updateFromACP(
                 inputChars: client.totalCharsSent,
@@ -2441,9 +2521,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             )
         }
         client.onError = { [weak self] msg in
+            debugLog("ACP: error: \(msg)")
             self?.flashStatusBar("ACP Error: \(msg)")
         }
         client.onTurnEnd = { [weak self, weak tab] _ in
+            debugLog("ACP: turn end")
             guard let self, let tab else { return }
             if let credits = tab.acpClient?.lastTurnCredits, credits > 0 {
                 tab.tokenTracker.addCredits(credits)
@@ -2473,6 +2555,15 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             }
         }
         client.onSessionReady = { [weak self, weak tab] in
+            debugLog("ACP: session ready")
+            self?.acpTimeoutTimer?.cancel()
+            self?.acpTimeoutTimer = nil
+            // Clear loading state on the terminal view
+            if let tab {
+                let terminal = tab.splitContainer.focusedTerminal
+                terminal.isWaitingForOutput = false
+                terminal.loadingMessageText = ""
+            }
             self?.flashStatusBar("ACP: Session ready")
             // Load session history for the side panel
             if let tab, let cwd = tab.statusBar.currentPath {
@@ -2494,26 +2585,36 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
         client.onRecoveryFailed = { [weak self, weak tab] in
             guard let self, let tab else { return }
+            self.acpTimeoutTimer?.cancel()
+            self.acpTimeoutTimer = nil
             self.fallbackToPTY(tab: tab, message: "ACP: Connection lost — switching to PTY mode")
         }
         client.onProcessExited = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
+            self.acpTimeoutTimer?.cancel()
+            self.acpTimeoutTimer = nil
             self.toolCallStack?.clearAll()
             self.fallbackToPTY(tab: tab, message: "ACP: Disconnected — switching to PTY mode")
         }
         client.onAuthRequired = { [weak self, weak tab] msg in
+            debugLog("ACP: auth required")
             guard let self, let tab else { return }
+            self.acpTimeoutTimer?.cancel()
+            self.acpTimeoutTimer = nil
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
         client.onToolCallStarted = { [weak self, weak tab] state in
+            debugLog("ACP: tool call started: \(state.title)")
             self?.ensureToolCallStack()
             self?.toolCallStack?.addToolCall(state)
             tab?.tokenTracker.appendToolCall(state.title)
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
+            debugLog("ACP: tool call updated: \(id) status=\(status)")
             self?.toolCallStack?.updateToolCall(id: id, status: status, content: content)
         }
         client.onPermissionRequest = { [weak self] request in
+            debugLog("ACP: permission request: \(request.toolName)")
             self?.ensureToolCallStack()
             self?.toolCallStack?.addPermissionRequest(request)
         }

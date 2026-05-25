@@ -18,10 +18,12 @@ build-core-debug:
 
 # Build the Swift app (requires core to be built first)
 build-app: build-core
+    rm -f {{app_dir}}/.build/arm64-apple-macosx/release/AwalTerminal {{app_dir}}/.build/apple/Products/Release/AwalTerminal
     cd {{app_dir}} && swift build -c release
 
 # Build the Swift app (debug)
 build-app-debug: build-core-debug
+    rm -f {{app_dir}}/.build/arm64-apple-macosx/debug/AwalTerminal
     cd {{app_dir}} && swift build
 
 # Build everything
@@ -44,6 +46,7 @@ test-rust:
 
 # Run Swift tests
 test-swift: build-core-debug
+    rm -f {{app_dir}}/.build/arm64-apple-macosx/debug/AwalTerminalPackageTests.xctest/Contents/MacOS/AwalTerminalPackageTests
     cd {{app_dir}} && swift test
 
 # Clean all build artifacts

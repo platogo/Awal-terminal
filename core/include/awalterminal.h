@@ -78,7 +78,8 @@ typedef struct CRegionSummary {
  *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
  *             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
  *             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
- *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError
+ *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
+ *             17=Stderr, 18=ProtocolLog
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -463,15 +464,6 @@ void at_surface_analyze(struct ATSurface *surface);
 char *at_surface_get_input_line(const struct ATSurface *surface);
 
 /**
- * Spawn kiro-cli acp. Returns opaque handle or null on failure.
- */
-struct ATAcpClient *at_acp_spawn(const char *kiro_path,
-                                 const char *cwd,
-                                 const char *agent,
-                                 const char *engine,
-                                 const char *trust_tools);
-
-/**
  * Poll next event. Returns null if no event available.
  * Caller must free with at_acp_free_event.
  */
@@ -526,11 +518,6 @@ int32_t at_acp_respond_fs_write(struct ATAcpClient *client,
 uint8_t at_acp_get_state(const struct ATAcpClient *client);
 
 /**
- * Trigger a manual respawn. Returns 0 on success, -1 on error.
- */
-int32_t at_acp_respawn(struct ATAcpClient *client);
-
-/**
  * Free an event returned by at_acp_poll_event.
  */
 void at_acp_free_event(struct ATAcpEvent *event);
@@ -541,21 +528,38 @@ void at_acp_free_event(struct ATAcpEvent *event);
 char *at_acp_get_session_id(const struct ATAcpClient *client);
 
 /**
- * Spawn kiro-cli acp and resume an existing session. Returns opaque handle or null on failure.
- */
-struct ATAcpClient *at_acp_spawn_resume(const char *kiro_path,
-                                        const char *cwd,
-                                        const char *session_id,
-                                        const char *engine,
-                                        const char *trust_tools);
-
-/**
- * Force-kill the ACP child process (hard termination, no graceful cancel).
+ * Force-kill: signals the ACP state machine for hard termination.
+ * Caller is responsible for terminating the actual process.
  */
 void at_acp_force_kill(struct ATAcpClient *client);
 
 /**
- * Destroy the ACP client (kills child process).
+ * Create an ACP client that only writes to stdin (reading handled by caller).
+ * Returns opaque handle or null on failure.
+ */
+struct ATAcpClient *at_acp_create_writer(int32_t stdin_fd);
+
+/**
+ * Feed a line of stdout to the ACP client for JSON-RPC parsing.
+ */
+void at_acp_feed_line(struct ATAcpClient *client,
+                      const char *line);
+
+/**
+ * Set the session ID to resume after initialization.
+ */
+void at_acp_set_resume_session(struct ATAcpClient *client,
+                               const char *session_id);
+
+/**
+ * Set the working directory for session/new and session/resume requests.
+ */
+void at_acp_set_cwd(struct ATAcpClient *client,
+                    const char *cwd);
+
+/**
+ * Destroy the ACP client and free all resources.
+ * Caller is responsible for terminating the actual process beforehand.
  */
 void at_acp_destroy(struct ATAcpClient *client);
 

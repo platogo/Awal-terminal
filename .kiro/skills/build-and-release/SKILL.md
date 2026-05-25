@@ -38,6 +38,9 @@ description: Build system and release workflow. Use when building, bundling, or 
 - Both trigger on push/PR to main
 - Note: `ci.yml` and `test.yml` have overlapping jobs; both run the full Rust + Swift test suite.
 
+## Known Issues
+- **SPM does not detect `.a` changes:** Swift Package Manager won't relink when only `libawalterminal.a` changes. The justfile deletes the Swift binary before `swift build` to force relinking (~1.7s). Without this, Rust code changes silently produce a stale binary.
+
 ## Red Flags
 - Building Swift without building Rust first → linker errors
 - Stale header after adding FFI functions → Swift compilation errors

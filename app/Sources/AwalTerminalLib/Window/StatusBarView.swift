@@ -51,6 +51,7 @@ class StatusBarView: NSView, NSMenuDelegate {
         label.drawsBackground = false
         return label
     }()
+    private let sessionModeLabel = NSTextField(labelWithString: "")
     private let cpuLabel = NSTextField(labelWithString: "")
     private let dimsLabel = NSTextField(labelWithString: "")
     private let tokensLabel: VoiceClickLabel = {
@@ -248,7 +249,7 @@ class StatusBarView: NSView, NSMenuDelegate {
         let pathColor = NSColor(white: 0.60, alpha: 1.0)
         let branchColor = NSColor(red: 45.0/255.0, green: 127.0/255.0, blue: 212.0/255.0, alpha: 1.0)
 
-        let labels: [NSTextField] = [gitLabel, cpuLabel, dimsLabel, timeLabel]
+        let labels: [NSTextField] = [gitLabel, sessionModeLabel, cpuLabel, dimsLabel, timeLabel]
         for label in labels {
             label.font = monoFont
             label.textColor = dimColor
@@ -476,9 +477,13 @@ class StatusBarView: NSView, NSMenuDelegate {
             cpuLabel.trailingAnchor.constraint(equalTo: sep2.leadingAnchor, constant: -10),
             cpuLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            // Dims (before CPU)
-            dimsLabel.trailingAnchor.constraint(equalTo: cpuLabel.leadingAnchor, constant: -10),
+            // Dims (before session mode)
+            dimsLabel.trailingAnchor.constraint(equalTo: sessionModeLabel.leadingAnchor, constant: -10),
             dimsLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            // Session mode (before CPU)
+            sessionModeLabel.trailingAnchor.constraint(equalTo: cpuLabel.leadingAnchor, constant: -10),
+            sessionModeLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
 
         generatingWidthConstraint = generatingLabel.widthAnchor.constraint(equalToConstant: 0)
@@ -1087,6 +1092,10 @@ class StatusBarView: NSView, NSMenuDelegate {
 
     func setWorktreeIsolated(_ isolated: Bool) {
         worktreeBadge.isHidden = !isolated
+    }
+
+    func setSessionMode(_ mode: String) {
+        sessionModeLabel.stringValue = mode
     }
 
     func setRedact(_ active: Bool) {
