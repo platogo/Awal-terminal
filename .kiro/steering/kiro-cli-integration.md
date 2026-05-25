@@ -23,7 +23,7 @@ Initializing → Ready ↔ Prompting
                 ↓           ↓
             Dead ←── Recovering
 ```
-Max 3 crash retries with automatic `session/resume` on respawn. Auth errors go directly to `Dead` → PTY fallback.
+Auth errors go directly to `Dead` → PTY fallback.
 
 ## Authentication
 
@@ -75,7 +75,7 @@ This means:
 | Diff review UI | `app/Sources/AwalTerminalLib/Window/DiffReviewController.swift` | Hunk-level accept/reject |
 
 ## FFI Event Codes
-0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall, 4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited, 8=PermissionRequest, 9=Cancelled, 10=AuthRequired, 11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned, 14=SubagentProgress, 15=SubagentComplete, 16=SubagentError
+0=Initialized, 1=SessionCreated, 2=TextChunk, 3=ToolCall, 4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited, 8=PermissionRequest, 9=Cancelled, 10=AuthRequired, 11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned, 14=SubagentProgress, 15=SubagentComplete, 16=SubagentError, 17=Stderr, 18=ProtocolLog
 
 ## Configuration
 `~/.config/awal/config.toml` `[kiro]` section: `binary_path`, `default_agent`, `agent_engine`, `trust` (all|safe|none), `trusted_tools`, `permission_timeout`, `credit_cost_usd`, `token_path`.

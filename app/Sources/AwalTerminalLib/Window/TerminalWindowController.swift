@@ -1662,13 +1662,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.reloadTabBar()
         }
 
-        terminal.onACPLaunchRequested = { [weak self, weak tab] model, workingDir in
-            guard let self, let tab else { return }
-            let config = AppConfig.shared
-            let kiroPath = config.kiroBinaryPath ?? "kiro-cli"
-            let cwd = workingDir
-            self.startACPSession(kiroPath: kiroPath, cwd: cwd)
-        }
+
 
         // Show AWAKE badge if sleep prevention is already active globally
         let globallyAwake = TerminalWindowTracker.shared.allControllers.contains { c in
@@ -2399,7 +2393,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             acpTimeoutTimer = timer
         } else {
             debugLog("ACP: spawn FAILED")
-            showACPSpawnError(kiroPath: kiroPath) {
+            showACPSpawnError(binaryPath: acpBinary) {
                 self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
             }
         }
@@ -2424,18 +2418,18 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
         } else {
-            showACPSpawnError(kiroPath: kiroPath) {
+            showACPSpawnError(binaryPath: acpBinary) {
                 self.fallbackToPTY(tab: tab, message: "kiro-cli acp unavailable — using PTY mode")
             }
         }
     }
 
-    private func showACPSpawnError(kiroPath: String, completion: @escaping () -> Void) {
+    private func showACPSpawnError(binaryPath: String, completion: @escaping () -> Void) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "ACP Failed to Start"
         alert.informativeText = """
-            Could not launch kiro-cli at: \(kiroPath)
+            Could not launch kiro-cli at: \(binaryPath)
 
             macOS GUI apps don't inherit your shell's PATH, so bare command names won't resolve.
 

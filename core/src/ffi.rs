@@ -1233,7 +1233,8 @@ pub extern "C" fn at_acp_get_session_id(client: *const ATAcpClient) -> *mut c_ch
     }
 }
 
-/// Force-kill the ACP child process (hard termination, no graceful cancel).
+/// Force-kill: signals the ACP state machine for hard termination.
+/// Caller is responsible for terminating the actual process.
 #[no_mangle]
 pub extern "C" fn at_acp_force_kill(client: *mut ATAcpClient) {
     let client = mut_ref_or!(client);
@@ -1286,7 +1287,8 @@ pub extern "C" fn at_acp_set_cwd(client: *mut ATAcpClient, cwd: *const c_char) {
     client.0.set_cwd(cwd_str);
 }
 
-/// Destroy the ACP client (kills child process).
+/// Destroy the ACP client and free all resources.
+/// Caller is responsible for terminating the actual process beforehand.
 #[no_mangle]
 pub extern "C" fn at_acp_destroy(client: *mut ATAcpClient) {
     if !client.is_null() {

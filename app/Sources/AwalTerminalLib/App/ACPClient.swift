@@ -90,6 +90,7 @@ class ACPClient {
 
         let stdinFd = dup(inPipe.fileHandleForWriting.fileDescriptor)
         guard stdinFd >= 0, let h = at_acp_create_writer(stdinFd) else {
+            if stdinFd >= 0 { close(stdinFd) }
             proc.terminate()
             return false
         }

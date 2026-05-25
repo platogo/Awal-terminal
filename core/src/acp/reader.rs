@@ -98,7 +98,13 @@ pub fn parse_line(
     if line.is_empty() {
         return None;
     }
-    let msg: RawMessage = serde_json::from_str(line).ok()?;
+    let msg: RawMessage = match serde_json::from_str(line) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[ACP reader] failed to parse line: {e}");
+            return None;
+        }
+    };
     parse_message(msg, pending_methods)
 }
 

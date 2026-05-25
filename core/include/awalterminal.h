@@ -527,7 +527,8 @@ void at_acp_free_event(struct ATAcpEvent *event);
 char *at_acp_get_session_id(const struct ATAcpClient *client);
 
 /**
- * Force-kill the ACP child process (hard termination, no graceful cancel).
+ * Force-kill: signals the ACP state machine for hard termination.
+ * Caller is responsible for terminating the actual process.
  */
 void at_acp_force_kill(struct ATAcpClient *client);
 
@@ -556,7 +557,8 @@ void at_acp_set_cwd(struct ATAcpClient *client,
                     const char *cwd);
 
 /**
- * Destroy the ACP client (kills child process).
+ * Destroy the ACP client and free all resources.
+ * Caller is responsible for terminating the actual process beforehand.
  */
 void at_acp_destroy(struct ATAcpClient *client);
 
