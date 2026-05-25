@@ -3,6 +3,13 @@ use crate::acp::protocol::{
     SessionNewResult, SessionUpdate, SessionUpdateParams, ToolCallStatus,
 };
 
+fn serde_str<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default()
+}
+
 /// Events produced by the ACP reader thread.
 pub enum AcpEvent {
     Initialized,
@@ -201,7 +208,7 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     }
                 };
                 Some(AcpEvent::TurnEnd {
-                    stop_reason: format!("{:?}", r.stop_reason),
+                    stop_reason: serde_str(&r.stop_reason),
                     credits_used: r.credits_used,
                 })
             }
@@ -223,9 +230,9 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     title: tc.title,
                     kind: match tc.kind {
                         agent_client_protocol_schema::ToolKind::Other => None,
-                        k => Some(format!("{k:?}").to_lowercase()),
+                        k => Some(serde_str(&k)),
                     },
-                    status: format!("{:?}", tc.status).to_lowercase(),
+                    status: serde_str(&tc.status),
                 }),
                 SessionUpdate::ToolCallUpdate(tcu) => {
                     let text = tcu.fields.content.as_ref().and_then(|items| {
@@ -242,7 +249,7 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     let status = tcu.fields.status.unwrap_or(ToolCallStatus::Pending);
                     Some(AcpEvent::ToolCallUpdate {
                         id: tcu.tool_call_id.0.to_string(),
-                        status: format!("{status:?}").to_lowercase(),
+                        status: serde_str(&status),
                         content: text,
                     })
                 }
