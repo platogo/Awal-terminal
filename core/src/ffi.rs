@@ -1079,7 +1079,7 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     subagent_id,
                     message,
                 } => (16, string_to_c(message), string_to_c(subagent_id)),
-AcpEvent::Stderr(msg) => (17, string_to_c(msg), std::ptr::null_mut()),
+                AcpEvent::Stderr(msg) => (17, string_to_c(msg), std::ptr::null_mut()),
                 AcpEvent::ProtocolLog(msg) => (18, string_to_c(msg), std::ptr::null_mut()),
                 AcpEvent::AgentThought(t) => (19, string_to_c(t), std::ptr::null_mut()),
                 AcpEvent::PlanUpdate { entries_json } => {
@@ -1094,7 +1094,7 @@ AcpEvent::Stderr(msg) => (17, string_to_c(msg), std::ptr::null_mut()),
                     cost,
                     currency,
                 } => (
-                    20,
+                    22,
                     string_to_c(&format!("{used_tokens}\t{context_window_size}")),
                     string_to_c(&format!(
                         "{}\t{}",

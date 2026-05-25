@@ -213,7 +213,7 @@ fn parse_message(
             }
             "session/cancel" => None, // Ignore legacy cancel responses
             "session/prompt" => {
-let r: PromptResponseWithCredits = match serde_json::from_value(result) {
+                let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("[ACP] Failed to parse session/prompt result: {e}");
@@ -722,5 +722,274 @@ mod tests {
                 .unwrap();
         let event = parse_message(msg, &pending).unwrap();
         assert!(matches!(event, AcpEvent::Cancelled));
+    }
+
+    // --- Integration tests: full message pipeline ---
+
+    /// Helper: parse a JSON line through the full pipeline.
+    fn parse_line(json: &str, pending: &Arc<Mutex<HashMap<u64, String>>>) -> Option<AcpEvent> {
+        let msg: RawMessage = serde_json::from_str(json).ok()?;
+        parse_message(msg, pending)
+    }
+
+    #[test]
+    fn integration_full_session_lifecycle() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending.lock().unwrap().insert(1, "initialize".to_string());
+        pending.lock().unwrap().insert(2, "session/new".to_string());
+        pending
+            .lock()
+            .unwrap()
+            .insert(3, "session/prompt".to_string());
+
+        // 1. Initialize response
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-01-01","agentCapabilities":{"loadSession":true},"agentInfo":{"name":"kiro-cli","version":"1.5.0"}}}"#,
+            &pending,
+        ).unwrap();
+        assert!(matches!(ev, AcpEvent::Initialized));
+
+        // 2. Session/new response
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-abc123"}}"#,
+            &pending,
+        )
+        .unwrap();
+        match ev {
+            AcpEvent::SessionCreated(id) => assert_eq!(id, "sess-abc123"),
+            _ => panic!("expected SessionCreated"),
+        }
+
+        // 3. Text chunks
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}"#,
+            &pending,
+        ).unwrap();
+        match &ev {
+            AcpEvent::TextChunk(t) => assert_eq!(t, "Hello "),
+            _ => panic!("expected TextChunk"),
+        }
+
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}"#,
+            &pending,
+        ).unwrap();
+        match ev {
+            AcpEvent::TextChunk(t) => assert_eq!(t, "world"),
+            _ => panic!("expected TextChunk"),
+        }
+
+        // 4. Prompt response → TurnEnd
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","credits":0.05}}"#,
+            &pending,
+        )
+        .unwrap();
+        match ev {
+            AcpEvent::TurnEnd {
+                stop_reason,
+                credits_used,
+            } => {
+                assert_eq!(stop_reason, "end_turn");
+                assert_eq!(credits_used, Some(0.05));
+            }
+            _ => panic!("expected TurnEnd"),
+        }
+    }
+
+    #[test]
+    fn integration_tool_call_lifecycle() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        // 1. Tool call (pending)
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call","toolCallId":"tc-1","title":"Read file","kind":"read","status":"pending"}}"#,
+            &pending,
+        ).unwrap();
+        match &ev {
+            AcpEvent::ToolCall {
+                id,
+                title,
+                kind,
+                status,
+            } => {
+                assert_eq!(id, "tc-1");
+                assert_eq!(title, "Read file");
+                assert_eq!(kind.as_deref(), Some("read"));
+                assert_eq!(status, "pending");
+            }
+            _ => panic!("expected ToolCall"),
+        }
+
+        // 2. Tool call update (in_progress)
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"in_progress"}}"#,
+            &pending,
+        ).unwrap();
+        match &ev {
+            AcpEvent::ToolCallUpdate {
+                id,
+                status,
+                content,
+            } => {
+                assert_eq!(id, "tc-1");
+                assert_eq!(status, "in_progress");
+                assert!(content.is_none());
+            }
+            _ => panic!("expected ToolCallUpdate"),
+        }
+
+        // 3. Tool call update (completed with content)
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"file contents here"}}]}}"#,
+            &pending,
+        ).unwrap();
+        match ev {
+            AcpEvent::ToolCallUpdate {
+                id,
+                status,
+                content,
+            } => {
+                assert_eq!(id, "tc-1");
+                assert_eq!(status, "completed");
+                assert_eq!(content.as_deref(), Some("file contents here"));
+            }
+            _ => panic!("expected ToolCallUpdate"),
+        }
+    }
+
+    #[test]
+    fn integration_cancel_flow() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(3, "session/prompt".to_string());
+
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}"#,
+            &pending,
+        )
+        .unwrap();
+        assert!(matches!(ev, AcpEvent::Cancelled));
+    }
+
+    #[test]
+    fn integration_thought_chunk() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Let me analyze this..."}}}"#,
+            &pending,
+        ).unwrap();
+        match ev {
+            AcpEvent::AgentThought(t) => assert_eq!(t, "Let me analyze this..."),
+            _ => panic!("expected AgentThought"),
+        }
+    }
+
+    #[test]
+    fn integration_plan_update() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"plan","entries":[{"content":"Read the codebase","priority":"high","status":"completed"},{"content":"Implement changes","priority":"medium","status":"in_progress"}]}}"#,
+            &pending,
+        ).unwrap();
+        match ev {
+            AcpEvent::PlanUpdate { entries_json } => {
+                assert!(entries_json.contains("Read the codebase"));
+                assert!(entries_json.contains("Implement changes"));
+                assert!(entries_json.contains("completed"));
+                assert!(entries_json.contains("in_progress"));
+            }
+            _ => panic!("expected PlanUpdate"),
+        }
+    }
+
+    #[test]
+    fn integration_subagent_lifecycle() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        // 1. Subagent spawned
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_spawned","subagentId":"sub-42","name":"code-reviewer","role":"review","parentSessionId":"s1","dependsOn":[]}}"#,
+            &pending,
+        ).unwrap();
+        match &ev {
+            AcpEvent::SubagentSpawned {
+                subagent_id,
+                name,
+                role,
+                ..
+            } => {
+                assert_eq!(subagent_id, "sub-42");
+                assert_eq!(name, "code-reviewer");
+                assert_eq!(role.as_deref(), Some("review"));
+            }
+            _ => panic!("expected SubagentSpawned"),
+        }
+
+        // 2. Subagent progress
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_progress","subagentId":"sub-42","phase":"Reviewing files","tokensUsed":2000}}"#,
+            &pending,
+        ).unwrap();
+        match &ev {
+            AcpEvent::SubagentProgress {
+                subagent_id,
+                phase,
+                tokens_used,
+            } => {
+                assert_eq!(subagent_id, "sub-42");
+                assert_eq!(phase, "Reviewing files");
+                assert_eq!(*tokens_used, Some(2000));
+            }
+            _ => panic!("expected SubagentProgress"),
+        }
+
+        // 3. Subagent complete
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_complete","subagentId":"sub-42","tokensUsed":4500}}"#,
+            &pending,
+        ).unwrap();
+        match ev {
+            AcpEvent::SubagentComplete {
+                subagent_id,
+                tokens_used,
+            } => {
+                assert_eq!(subagent_id, "sub-42");
+                assert_eq!(tokens_used, Some(4500));
+            }
+            _ => panic!("expected SubagentComplete"),
+        }
+    }
+
+    #[test]
+    fn integration_malformed_json_no_panic() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        // Invalid JSON
+        assert!(parse_line("not json at all", &pending).is_none());
+
+        // Partial JSON
+        assert!(parse_line(r#"{"jsonrpc":"2.0","id":1"#, &pending).is_none());
+
+        // Empty string
+        assert!(parse_line("", &pending).is_none());
+
+        // Valid JSON but missing required fields for any event
+        assert!(parse_line(r#"{"foo":"bar"}"#, &pending).is_none());
+    }
+
+    #[test]
+    fn integration_unknown_session_update_variant() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        let ev = parse_line(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"quantum_teleport","data":{"qubits":42}}}"#,
+            &pending,
+        );
+        assert!(ev.is_none());
     }
 }
