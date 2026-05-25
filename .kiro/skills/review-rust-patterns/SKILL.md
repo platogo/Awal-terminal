@@ -44,6 +44,7 @@ description: Rust review patterns — FFI safety, platform APIs, memory, API sta
 ## Red Flags
 - `unsafe` with no safety comment explaining the invariant
 - `unwrap()` / `expect()` in library code (not tests)
+- `.ok()?` on `serde_json::from_value()` silently swallows type mismatches — log the error or use `map_err` to surface it. A single wrong field type (e.g., integer vs string) can silently break an entire code path.
 - `String::from_utf8_unchecked` without prior validation
 - `std::mem::transmute` without exhaustive justification
 - Blocking I/O on async runtime threads

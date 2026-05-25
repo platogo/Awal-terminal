@@ -17,6 +17,10 @@ description: Swift/AppKit review patterns — security, platform APIs, UI, error
 - Missing `"--"` before user-controlled paths in process arguments
 - `Pipe()` + `waitUntilExit()` without reading the pipe — deadlock if buffer fills (~64KB)
 - Timeout via semaphore is complex; prefer `DispatchQueue.asyncAfter` + `process.isRunning` check
+- GUI apps have minimal environment — always set `proc.environment` with augmented PATH when spawning child processes. Use `ProcessInfo.processInfo.environment` as base and prepend the binary's directory.
+- `dup()` pipe fds before passing to Rust FFI — prevents double-close when both Swift Pipe and Rust File own the same fd.
+- `DispatchSource.makeReadSource` on pipe fds requires `O_NONBLOCK` — set via `fcntl(fd, F_SETFL, flags | O_NONBLOCK)`.
+- Never `dup()` + `read()` a pipe fd that another reader (DispatchSource) is consuming — both share the same pipe buffer, reads from one drain data for the other.
 
 ## Concurrency & Locking
 - `NSLock` is exclusive (mutex) — NOT a reader-writer lock
