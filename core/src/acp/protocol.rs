@@ -192,6 +192,7 @@ pub enum SessionUpdate {
         subagent_id: String,
         message: String,
     },
+    UsageUpdate(agent_client_protocol_schema::UsageUpdate),
     #[serde(other)]
     Unknown,
 }

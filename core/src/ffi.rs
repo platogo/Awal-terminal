@@ -1088,6 +1088,20 @@ AcpEvent::Stderr(msg) => (17, string_to_c(msg), std::ptr::null_mut()),
                 AcpEvent::ImageContent { data, mime_type } => {
                     (21, string_to_c(data), string_to_c(mime_type))
                 }
+                AcpEvent::UsageUpdate {
+                    used_tokens,
+                    context_window_size,
+                    cost,
+                    currency,
+                } => (
+                    20,
+                    string_to_c(&format!("{used_tokens}\t{context_window_size}")),
+                    string_to_c(&format!(
+                        "{}\t{}",
+                        cost.map_or(String::new(), |c| c.to_string()),
+                        currency.as_deref().unwrap_or("")
+                    )),
+                ),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,

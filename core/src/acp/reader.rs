@@ -61,6 +61,13 @@ pub enum AcpEvent {
         path: String,
         content: String,
     },
+    /// Context window usage update.
+    UsageUpdate {
+        used_tokens: u64,
+        context_window_size: u64,
+        cost: Option<f64>,
+        currency: Option<String>,
+    },
     /// A subagent was spawned.
     SubagentSpawned {
         subagent_id: String,
@@ -315,6 +322,18 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     subagent_id,
                     message,
                 }),
+                SessionUpdate::UsageUpdate(u) => {
+                    let (cost, currency) = u
+                        .cost
+                        .map(|c| (Some(c.amount), Some(c.currency)))
+                        .unwrap_or((None, None));
+                    Some(AcpEvent::UsageUpdate {
+                        used_tokens: u.used,
+                        context_window_size: u.size,
+                        cost,
+                        currency,
+                    })
+                }
                 SessionUpdate::Unknown => None,
             }
         } else {
@@ -644,6 +663,30 @@ mod tests {
         .unwrap();
         let event = parse_message(msg, &pending);
         assert!(event.is_none());
+    }
+
+    #[test]
+    fn parse_usage_update_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"usage_update","used":5000,"size":200000,"cost":{"amount":0.05,"currency":"USD"}}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::UsageUpdate {
+                used_tokens,
+                context_window_size,
+                cost,
+                currency,
+            } => {
+                assert_eq!(used_tokens, 5000);
+                assert_eq!(context_window_size, 200000);
+                assert_eq!(cost, Some(0.05));
+                assert_eq!(currency.as_deref(), Some("USD"));
+            }
+            _ => panic!("expected UsageUpdate"),
+        }
     }
 
     #[test]
