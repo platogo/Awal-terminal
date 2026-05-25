@@ -78,7 +78,8 @@ typedef struct CRegionSummary {
  *             4=ToolCallUpdate, 5=TurnEnd, 6=Error, 7=ProcessExited,
  *             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
  *             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
- *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError
+ *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
+ *             17=Stderr, 18=ProtocolLog
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;

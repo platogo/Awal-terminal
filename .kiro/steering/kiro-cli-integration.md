@@ -62,7 +62,7 @@ This means:
 | Rust client | `core/src/acp/client.rs` | State machine, spawn, crash recovery |
 | Rust reader | `core/src/acp/reader.rs` | Background stdout parsing → `AcpEvent` |
 | Rust diff | `core/src/acp/diff.rs` | Unified diff parser for hunk accept/reject |
-| FFI | `core/src/ffi.rs` | 19 `at_acp_*` functions |
+| FFI | `core/src/ffi.rs` | 20 `at_acp_*` functions |
 | Swift wrapper | `app/Sources/AwalTerminalLib/App/ACPClient.swift` | Polling (16ms timer, 100 events/tick), callbacks |
 | Controller | `app/Sources/AwalTerminalLib/Window/TerminalWindowController.swift` | Session lifecycle, UI wiring, fallback |
 | Session persistence | `app/Sources/AwalTerminalLib/App/SessionManager.swift` | Save/resume metadata |

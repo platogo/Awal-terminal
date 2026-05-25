@@ -116,7 +116,13 @@ fn parse_message(
     if let (Some(id), Some(method)) = (msg.id, msg.method.as_ref()) {
         match method.as_str() {
             "session/request_permission" => {
-                let params: RequestPermissionParams = serde_json::from_value(msg.params?).ok()?;
+                let params: RequestPermissionParams = match serde_json::from_value(msg.params?) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("[ACP] Failed to parse permission request: {e}");
+                        return None;
+                    }
+                };
                 return Some(AcpEvent::PermissionRequest {
                     request_id: id,
                     tool_call_id: params.tool_call_id,
@@ -160,16 +166,40 @@ fn parse_message(
         let result = msg.result?;
         match method.as_str() {
             "initialize" => {
-                let _: InitializeResult = serde_json::from_value(result).ok()?;
+                let _: InitializeResult = match serde_json::from_value(result) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[ACP] Failed to parse initialize result: {e}");
+                        return Some(AcpEvent::Error(format!(
+                            "Failed to parse initialize response: {e}"
+                        )));
+                    }
+                };
                 Some(AcpEvent::Initialized)
             }
             "session/new" | "session/resume" => {
-                let r: SessionNewResult = serde_json::from_value(result).ok()?;
+                let r: SessionNewResult = match serde_json::from_value(result) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[ACP] Failed to parse session/new result: {e}");
+                        return Some(AcpEvent::Error(format!(
+                            "Failed to parse session/new response: {e}"
+                        )));
+                    }
+                };
                 Some(AcpEvent::SessionCreated(r.session_id))
             }
             "session/cancel" => Some(AcpEvent::Cancelled),
             "session/prompt" => {
-                let r: SessionPromptResult = serde_json::from_value(result).ok()?;
+                let r: SessionPromptResult = match serde_json::from_value(result) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[ACP] Failed to parse session/prompt result: {e}");
+                        return Some(AcpEvent::Error(format!(
+                            "Failed to parse prompt response: {e}"
+                        )));
+                    }
+                };
                 if !r.extra.is_empty() {
                     eprintln!("[ACP] session/prompt extra fields: {:?}", r.extra);
                 }
