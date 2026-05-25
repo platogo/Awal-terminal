@@ -15,6 +15,14 @@ pub enum AcpEvent {
     Initialized,
     SessionCreated(String),
     TextChunk(String),
+    AgentThought(String),
+    PlanUpdate {
+        entries_json: String,
+    },
+    ImageContent {
+        data: String,
+        mime_type: String,
+    },
     ToolCall {
         id: String,
         title: String,
@@ -222,9 +230,19 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
             match update.update {
                 SessionUpdate::AgentMessageChunk { content } => match content {
                     ContentBlock::Text(tc) => Some(AcpEvent::TextChunk(tc.text)),
+                    ContentBlock::Image(img) => Some(AcpEvent::ImageContent {
+                        data: img.data,
+                        mime_type: img.mime_type,
+                    }),
+                    _ => {
+                        eprintln!("[ACP] Unsupported content type in AgentMessageChunk");
+                        None
+                    }
+                },
+                SessionUpdate::AgentThoughtChunk { content } => match content {
+                    ContentBlock::Text(t) => Some(AcpEvent::AgentThought(t.text)),
                     _ => None,
                 },
-                SessionUpdate::AgentThoughtChunk { .. } => None,
                 SessionUpdate::ToolCall(tc) => Some(AcpEvent::ToolCall {
                     id: tc.tool_call_id.0.to_string(),
                     title: tc.title,
@@ -253,7 +271,10 @@ let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                         content: text,
                     })
                 }
-                SessionUpdate::Plan(_) => None,
+                SessionUpdate::Plan(plan) => {
+                    let json = serde_json::to_string(&plan).unwrap_or_default();
+                    Some(AcpEvent::PlanUpdate { entries_json: json })
+                }
                 SessionUpdate::TurnEnd => Some(AcpEvent::TurnEnd {
                     stop_reason: "end_turn".to_string(),
                     credits_used: None,
@@ -580,6 +601,65 @@ mod tests {
                 assert_eq!(message, "timeout exceeded");
             }
             _ => panic!("expected SubagentError"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_thought_chunk() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::AgentThought(t) => assert_eq!(t, "thinking..."),
+            _ => panic!("expected AgentThought"),
+        }
+    }
+
+    #[test]
+    fn parse_plan_update() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"plan","entries":[{"content":"Step 1","priority":"high","status":"in_progress"}]}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::PlanUpdate { entries_json } => {
+                assert!(entries_json.contains("Step 1"));
+                assert!(entries_json.contains("in_progress"));
+            }
+            _ => panic!("expected PlanUpdate"),
+        }
+    }
+
+    #[test]
+    fn parse_unknown_session_update_no_panic() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"some_future_thing","data":"whatever"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending);
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn parse_image_content_in_agent_message() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"base64data","mimeType":"image/png"}}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::ImageContent { data, mime_type } => {
+                assert_eq!(data, "base64data");
+                assert_eq!(mime_type, "image/png");
+            }
+            _ => panic!("expected ImageContent"),
         }
     }
 }
