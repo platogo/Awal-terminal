@@ -369,4 +369,19 @@ mod tests {
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         assert!(matches!(params.update, SessionUpdate::Unknown));
     }
+
+    #[test]
+    fn serialize_session_prompt_params_wire_format() {
+        let params = SessionPromptParams {
+            session_id: "sess-1".to_string(),
+            prompt: vec![ContentBlock::Text(TextContent::new("hello"))],
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["sessionId"], "sess-1");
+        // prompt field contains array of tagged content blocks
+        let prompt = json["prompt"].as_array().unwrap();
+        assert_eq!(prompt.len(), 1);
+        assert_eq!(prompt[0]["type"], "text");
+        assert_eq!(prompt[0]["text"], "hello");
+    }
 }
