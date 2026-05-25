@@ -1,6 +1,6 @@
 use crate::acp::protocol::{
-    InitializeResult, RawMessage, RequestPermissionParams, SessionNewResult, SessionPromptResult,
-    SessionUpdate, SessionUpdateParams,
+    ContentBlock, InitializeResult, PromptResponseWithCredits, RawMessage, RequestPermissionParams,
+    SessionNewResult, SessionUpdate, SessionUpdateParams, ToolCallStatus,
 };
 
 /// Events produced by the ACP reader thread.
@@ -191,7 +191,7 @@ fn parse_message(
             }
             "session/cancel" => Some(AcpEvent::Cancelled),
             "session/prompt" => {
-                let r: SessionPromptResult = match serde_json::from_value(result) {
+let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("[ACP] Failed to parse session/prompt result: {e}");
@@ -200,11 +200,8 @@ fn parse_message(
                         )));
                     }
                 };
-                if !r.extra.is_empty() {
-                    eprintln!("[ACP] session/prompt extra fields: {:?}", r.extra);
-                }
                 Some(AcpEvent::TurnEnd {
-                    stop_reason: r.stop_reason.unwrap_or_default(),
+                    stop_reason: format!("{:?}", r.stop_reason),
                     credits_used: r.credits_used,
                 })
             }
@@ -216,29 +213,40 @@ fn parse_message(
             let params = msg.params?;
             let update: SessionUpdateParams = serde_json::from_value(params).ok()?;
             match update.update {
-                SessionUpdate::AgentMessageChunk { content } => {
-                    Some(AcpEvent::TextChunk(content.text))
+                SessionUpdate::AgentMessageChunk { content } => match content {
+                    ContentBlock::Text(tc) => Some(AcpEvent::TextChunk(tc.text)),
+                    _ => None,
+                },
+                SessionUpdate::AgentThoughtChunk { .. } => None,
+                SessionUpdate::ToolCall(tc) => Some(AcpEvent::ToolCall {
+                    id: tc.tool_call_id.0.to_string(),
+                    title: tc.title,
+                    kind: match tc.kind {
+                        agent_client_protocol_schema::ToolKind::Other => None,
+                        k => Some(format!("{k:?}").to_lowercase()),
+                    },
+                    status: format!("{:?}", tc.status).to_lowercase(),
+                }),
+                SessionUpdate::ToolCallUpdate(tcu) => {
+                    let text = tcu.fields.content.as_ref().and_then(|items| {
+                        items.iter().find_map(|item| match item {
+                            agent_client_protocol_schema::ToolCallContent::Content(c) => {
+                                match &c.content {
+                                    ContentBlock::Text(tc) => Some(tc.text.clone()),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        })
+                    });
+                    let status = tcu.fields.status.unwrap_or(ToolCallStatus::Pending);
+                    Some(AcpEvent::ToolCallUpdate {
+                        id: tcu.tool_call_id.0.to_string(),
+                        status: format!("{status:?}").to_lowercase(),
+                        content: text,
+                    })
                 }
-                SessionUpdate::ToolCall {
-                    tool_call_id,
-                    title,
-                    kind,
-                    status,
-                } => Some(AcpEvent::ToolCall {
-                    id: tool_call_id,
-                    title,
-                    kind,
-                    status,
-                }),
-                SessionUpdate::ToolCallUpdate {
-                    tool_call_id,
-                    status,
-                    content,
-                } => Some(AcpEvent::ToolCallUpdate {
-                    id: tool_call_id,
-                    status,
-                    content: content.map(|c| c.text),
-                }),
+                SessionUpdate::Plan(_) => None,
                 SessionUpdate::TurnEnd => Some(AcpEvent::TurnEnd {
                     stop_reason: "end_turn".to_string(),
                     credits_used: None,
@@ -279,6 +287,7 @@ fn parse_message(
                     subagent_id,
                     message,
                 }),
+                SessionUpdate::Unknown => None,
             }
         } else {
             None

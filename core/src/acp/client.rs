@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
     JsonRpcResponseOut, SessionCancelParams, SessionCancelSubagentParams, SessionNewParams,
-    SessionPromptParams, SessionResumeParams, SessionRewindParams,
+    SessionPromptParams, SessionResumeParams, SessionRewindParams, TextContent,
 };
 use crate::acp::reader::AcpEvent;
 
@@ -97,10 +97,7 @@ impl AcpClient {
             .ok_or("No active session".to_string())?;
         let params = SessionPromptParams {
             session_id,
-            prompt: vec![ContentBlock {
-                content_type: "text".to_string(),
-                text: text.to_string(),
-            }],
+            prompt: vec![ContentBlock::Text(TextContent::new(text))],
         };
         self.send_request(
             "session/prompt",
