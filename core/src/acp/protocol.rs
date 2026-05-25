@@ -247,6 +247,7 @@ pub struct RawMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol_schema::ContentBlock as SchemaContentBlock;
 
     #[test]
     fn serialize_initialize_request() {
@@ -327,5 +328,11 @@ mod tests {
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["sessionId"], "sess-123");
         assert_eq!(json.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn schema_crate_content_block_exists() {
+        // Verify the schema crate is usable by referencing its ContentBlock type.
+        let _block: Option<SchemaContentBlock> = None;
     }
 }
