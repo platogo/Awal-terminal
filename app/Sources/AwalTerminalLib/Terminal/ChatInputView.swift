@@ -109,7 +109,7 @@ class ChatInputView: NSView, NSTextViewDelegate {
         // Layout
         translatesAutoresizingMaskIntoConstraints = false
         let lineHeight = font.ascender - font.descender + font.leading
-        let baseHeight = lineHeight + 16 + 1 // text + insets + separator
+        let baseHeight = lineHeight * 3 + 16 + 1 // 3 lines + insets + separator
         heightConstraint = heightAnchor.constraint(equalToConstant: baseHeight)
         heightConstraint.priority = .defaultHigh
 

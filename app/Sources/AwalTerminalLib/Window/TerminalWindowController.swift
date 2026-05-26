@@ -2636,7 +2636,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private func feedToSurface(tab: TabState, text: String) {
         let terminal = tab.splitContainer.focusedTerminal
         guard let s = terminal.surface else { return }
-        let bytes = Array(text.utf8)
+        // ACP mode has no PTY, so simulate ONLCR: ensure every \n is preceded by \r
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+                            .replacingOccurrences(of: "\n", with: "\r\n")
+        let bytes = Array(normalized.utf8)
         guard !bytes.isEmpty else { return }
         bytes.withUnsafeBufferPointer { ptr in
             at_surface_feed_bytes(s, ptr.baseAddress!, UInt32(ptr.count))
@@ -2709,6 +2712,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 let terminal = tab.splitContainer.focusedTerminal
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
+                // Transition terminal out of menu state so rendering is unblocked
+                terminal.menuRenderPending = false
+                terminal.appState = .terminal
+                terminal.recalculateGridSize()
                 // Clear screen to remove loading message, then show session ready
                 self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
                 self?.showChatInput(for: tab)
