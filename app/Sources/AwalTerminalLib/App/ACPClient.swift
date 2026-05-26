@@ -357,7 +357,7 @@ class ACPClient {
                     requestId: requestId, toolCallId: toolCallId,
                     toolName: toolName, description: desc, kind: kind
                 )
-                handlePermissionRequest(request)
+                onPermissionRequest?(request)
             case 9: // Cancelled
                 isPrompting = false
                 onCancelled?()
@@ -450,23 +450,6 @@ class ACPClient {
             }
             // Guard against use-after-free: callbacks above may destroy this client
             guard self.handle != nil else { return }
-        }
-    }
-
-    private func handlePermissionRequest(_ request: PermissionRequest) {
-        let trust = AppConfig.shared.kiroTrustLevel
-        switch trust {
-        case .all:
-            respondPermission(requestId: request.requestId, approved: true)
-        case .safe:
-            let safeKinds: Set<ToolCallKind> = [.read, .glob, .grep, .code]
-            if safeKinds.contains(request.kind) {
-                respondPermission(requestId: request.requestId, approved: true)
-            } else {
-                onPermissionRequest?(request)
-            }
-        case .none:
-            onPermissionRequest?(request)
         }
     }
 

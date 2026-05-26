@@ -2507,14 +2507,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         wireACPCallbacks(client, tab: tab)
         let config = AppConfig.shared
         let engine = config.kiroAgentEngine
-        let trustTools: String? = config.kiroTrustLevel == .all
-            ? "all"
-            : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
         let tokenPath = config.resolvedKiroTokenPath
         let acpBinary = config.resolvedKiroACPBinaryPath
-        debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") trust=\(trustTools ?? "safe") token=\(tokenPath ?? "nil")")
+        debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") token=\(tokenPath ?? "nil")")
         let agent = config.kiroDefaultAgent ?? "master"
-        if client.spawn(kiroPath: acpBinary, cwd: cwd, agent: agent, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+        if client.spawn(kiroPath: acpBinary, cwd: cwd, agent: agent, engine: engine, trustTools: nil, tokenPath: tokenPath) {
             debugLog("ACP: spawn succeeded")
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
@@ -2548,12 +2545,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         wireACPCallbacks(client, tab: tab)
         let config = AppConfig.shared
         let engine = config.kiroAgentEngine
-        let trustTools: String? = config.kiroTrustLevel == .all
-            ? "all"
-            : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
         let tokenPath = config.resolvedKiroTokenPath
         let acpBinary = config.resolvedKiroACPBinaryPath
-        if client.spawnAndResume(kiroPath: acpBinary, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+        if client.spawnAndResume(kiroPath: acpBinary, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: nil, tokenPath: tokenPath) {
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
         } else {
