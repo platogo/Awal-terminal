@@ -2511,6 +2511,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let terminal = tab.splitContainer.focusedTerminal
         guard let s = terminal.surface else { return }
         let bytes = Array(text.utf8)
+        guard !bytes.isEmpty else { return }
         bytes.withUnsafeBufferPointer { ptr in
             at_surface_feed_bytes(s, ptr.baseAddress!, UInt32(ptr.count))
         }
