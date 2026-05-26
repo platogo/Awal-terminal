@@ -1793,12 +1793,6 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
             self.resumeACPSession(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId)
         }
-        tab.aiSidePanel.onRewind = { [weak self, weak tab] in
-            guard let tab else { return }
-            if tab.acpClient?.sendRewind() != true {
-                self?.flashStatusBar("ACP: Rewind failed")
-            }
-        }
     }
 
     private func handleFocusChanged(_ terminal: TerminalView, tab: TabState) {
@@ -2427,6 +2421,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 _ = tab.acpClient?.cancel()
             }
         }
+        input.onRewind = { [weak self, weak tab] in
+            guard let tab else { return }
+            if tab.acpClient?.sendRewind() != true {
+                self?.flashStatusBar("ACP: Rewind failed")
+            }
+        }
         tab.chatInputView = input
 
         // Only install if this tab is currently displayed
@@ -2616,7 +2616,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         // Close completed subagent tabs from previous orchestration
         closeCompletedSubagentTabs()
         feedToSurface(tab: activeTab, text: "\r\n\u{1b}[1;34m> \u{1b}[0m" + text + "\r\n")
-        activeTab.aiSidePanel.setRewindVisible(false)
+        activeTab.chatInputView?.setRewindVisible(false)
         if !acpClient.sendPrompt(text) {
             flashStatusBar("ACP: Failed to send prompt")
         }
@@ -2696,7 +2696,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 codeBlocks: 0,
                 diffs: 0
             )
-            tab.aiSidePanel.setRewindVisible(true)
+            tab.chatInputView?.setRewindVisible(true)
             // Re-enable chat input after turn completes
             tab.chatInputView?.setEnabled(true)
             tab.chatInputView?.focus()
@@ -2739,7 +2739,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 // Show rewind button if resuming a session with history
                 if let sid = tab.acpClient?.getSessionId(),
                    sessions.contains(where: { $0.id == sid && $0.turns > 0 }) {
-                    tab.aiSidePanel.setRewindVisible(true)
+                    tab.chatInputView?.setRewindVisible(true)
                 }
             }
         }

@@ -26,11 +26,21 @@ class ChatInputView: NSView, NSTextViewDelegate {
 
     var onSubmit: ((String) -> Void)?
     var onCancel: (() -> Void)?
+    var onRewind: (() -> Void)?
 
-    private let separator = NSView()
     private let scrollView = NSScrollView()
     private let textView = ChatTextView()
     private let sendButton = NSButton()
+    private let rewindButton: NSButton = {
+        let btn = NSButton(title: "⏪", target: nil, action: nil)
+        btn.bezelStyle = .inline
+        btn.isBordered = false
+        btn.font = NSFont.systemFont(ofSize: 13)
+        btn.toolTip = "Rewind last turn"
+        btn.isHidden = true
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        return btn
+    }()
     private let placeholderLabel = NSTextField(labelWithString: "Send a message...")
     private var heightConstraint: NSLayoutConstraint!
     private var maxHeightConstraint: NSLayoutConstraint!
@@ -46,12 +56,6 @@ class ChatInputView: NSView, NSTextViewDelegate {
 
     private func setupView() {
         let config = AppConfig.shared
-
-        // Separator line at top
-        separator.wantsLayer = true
-        separator.layer?.backgroundColor = config.themeFg.withAlphaComponent(0.15).cgColor
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(separator)
 
         // Scroll view + text view
         let font = config.resolvedFont
@@ -95,6 +99,11 @@ class ChatInputView: NSView, NSTextViewDelegate {
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholderLabel)
 
+        // Rewind button
+        rewindButton.target = self
+        rewindButton.action = #selector(rewindClicked)
+        addSubview(rewindButton)
+
         // Send button
         sendButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Send")
         sendButton.contentTintColor = config.themeAccent
@@ -105,26 +114,26 @@ class ChatInputView: NSView, NSTextViewDelegate {
         sendButton.isHidden = true
         addSubview(sendButton)
 
-        // Layout
+        // Layout — no separator, seamless with terminal above
         translatesAutoresizingMaskIntoConstraints = false
         let lineHeight = font.ascender - font.descender + font.leading
-        let baseHeight = lineHeight * 3 + 16 + 1 // 3 lines + insets + separator
+        let baseHeight = lineHeight * 3 + 16 // 3 lines + insets
         heightConstraint = heightAnchor.constraint(equalToConstant: baseHeight)
         heightConstraint.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
-            separator.topAnchor.constraint(equalTo: topAnchor),
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 0),
-
-            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 4),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 0),
-            scrollView.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -4),
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: rewindButton.leadingAnchor, constant: -4),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
 
             placeholderLabel.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 13),
             placeholderLabel.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 8),
+
+            rewindButton.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -4),
+            rewindButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            rewindButton.widthAnchor.constraint(equalToConstant: 24),
+            rewindButton.heightAnchor.constraint(equalToConstant: 24),
 
             sendButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 0),
             sendButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
@@ -174,6 +183,14 @@ class ChatInputView: NSView, NSTextViewDelegate {
         submit()
     }
 
+    @objc private func rewindClicked() {
+        onRewind?()
+    }
+
+    func setRewindVisible(_ visible: Bool) {
+        rewindButton.isHidden = !visible
+    }
+
     private func submit() {
         let text = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -195,7 +212,7 @@ class ChatInputView: NSView, NSTextViewDelegate {
         guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
         layoutManager.ensureLayout(for: container)
         let textHeight = layoutManager.usedRect(for: container).height
-        let newHeight = textHeight + 16 + 1 + 8 // insets + separator + padding
+        let newHeight = textHeight + 16 + 8 // insets + padding
         heightConstraint.constant = max(newHeight, 30)
         invalidateIntrinsicContentSize()
     }
