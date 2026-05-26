@@ -5,9 +5,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use crate::acp::protocol::{
-    ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
-    JsonRpcResponseOut, SessionCancelParams, SessionCancelSubagentParams, SessionNewParams,
-    SessionPromptParams, SessionResumeParams, SessionRewindParams, TextContent,
+    ContentBlock, JsonRpcRequest, JsonRpcResponseOut, SessionCancelParams,
+    SessionCancelSubagentParams, SessionNewParams, SessionPromptParams, SessionResumeParams,
+    SessionRewindParams, TextContent,
 };
 use crate::acp::reader::AcpEvent;
 
@@ -252,18 +252,12 @@ impl AcpClient {
     }
 
     fn send_initialize(&mut self) -> Result<(), String> {
-        let params = InitializeParams {
-            protocol_version: "2025-01-01".to_string(),
-            client_capabilities: ClientCapabilities {},
-            client_info: ClientInfo {
-                name: "AwalTerminal".to_string(),
-                version: "0.17.0".to_string(),
-            },
-        };
-        self.send_request(
-            "initialize",
-            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
-        )
+        let params = serde_json::json!({
+            "protocolVersion": 1,
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+            "clientInfo": { "name": "AwalTerminal", "version": "0.17.0" }
+        });
+        self.send_request("initialize", Some(params))
     }
 
     fn send_session_new(&mut self) -> Result<(), String> {

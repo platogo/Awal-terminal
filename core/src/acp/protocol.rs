@@ -58,13 +58,10 @@ pub struct JsonRpcNotification {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
-    pub protocol_version: String,
-    pub client_capabilities: ClientCapabilities,
+    pub protocol_version: u16,
+    pub client_capabilities: Value,
     pub client_info: ClientInfo,
 }
-
-#[derive(Serialize)]
-pub struct ClientCapabilities {}
 
 #[derive(Serialize)]
 pub struct ClientInfo {
@@ -255,24 +252,17 @@ mod tests {
 
     #[test]
     fn serialize_initialize_request() {
-        let req = JsonRpcRequest::new(
-            1,
-            "initialize",
-            Some(
-                serde_json::to_value(InitializeParams {
-                    protocol_version: "2025-01-01".to_string(),
-                    client_capabilities: ClientCapabilities {},
-                    client_info: ClientInfo {
-                        name: "AwalTerminal".to_string(),
-                        version: "0.17.0".to_string(),
-                    },
-                })
-                .unwrap(),
-            ),
-        );
+        let params = serde_json::json!({
+            "protocolVersion": 1,
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+            "clientInfo": { "name": "AwalTerminal", "version": "0.17.0" }
+        });
+        let req = JsonRpcRequest::new(1, "initialize", Some(params));
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"method\":\"initialize\""));
-        assert!(json.contains("\"protocolVersion\":\"2025-01-01\""));
+        assert!(json.contains("\"protocolVersion\":1"));
+        assert!(!json.contains("\"protocolVersion\":\""));
+        assert!(json.contains("\"clientCapabilities\":{\"fs\":{\"readTextFile\":true,\"writeTextFile\":true},\"terminal\":false}"));
     }
 
     #[test]
