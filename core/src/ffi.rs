@@ -1102,6 +1102,24 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                         currency.as_deref().unwrap_or("")
                     )),
                 ),
+                AcpEvent::MetadataUpdate {
+                    context_percentage,
+                    credits_used,
+                } => (
+                    23,
+                    string_to_c(&format!(
+                        "{context_percentage}\t{}",
+                        credits_used.unwrap_or(-1.0)
+                    )),
+                    std::ptr::null_mut(),
+                ),
+                AcpEvent::SessionInfoUpdate(title) => {
+                    (24, string_to_c(title), std::ptr::null_mut())
+                }
+                AcpEvent::CompactionStatus(status) => {
+                    (25, string_to_c(status), std::ptr::null_mut())
+                }
+                AcpEvent::SessionList(json) => (26, string_to_c(json), std::ptr::null_mut()),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1162,6 +1180,26 @@ pub extern "C" fn at_acp_cancel_subagent(
 pub extern "C" fn at_acp_send_rewind(client: *mut ATAcpClient) -> i32 {
     let client = mut_ref_or!(client, -1);
     match client.0.send_rewind() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Send session/close notification. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_send_close(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.send_close() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Request session list. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_send_list_sessions(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.send_list_sessions() {
         Ok(()) => 0,
         Err(_) => -1,
     }

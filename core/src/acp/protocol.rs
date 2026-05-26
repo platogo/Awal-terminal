@@ -175,11 +175,34 @@ pub enum SessionUpdate {
         message: String,
     },
     UsageUpdate(agent_client_protocol_schema::UsageUpdate),
+    SessionInfoUpdate {
+        title: String,
+    },
     #[serde(other)]
     Unknown,
 }
 
 // --- Permission request (server-to-client) ---
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCloseParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListParams {
+    pub cwd: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListEntry {
+    pub session_id: String,
+    pub title: Option<String>,
+    pub created_at: Option<String>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

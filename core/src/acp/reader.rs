@@ -96,6 +96,17 @@ pub enum AcpEvent {
     Stderr(String),
     /// Protocol diagnostic: "→ method" for sent, "← method" for received
     ProtocolLog(String),
+    /// Kiro metadata: direct context percentage and optional credits.
+    MetadataUpdate {
+        context_percentage: f64,
+        credits_used: Option<f64>,
+    },
+    /// Session info update (e.g. tab title).
+    SessionInfoUpdate(String),
+    /// Compaction status notification.
+    CompactionStatus(String),
+    /// Session list response (JSON array of sessions).
+    SessionList(String),
 }
 
 /// Auth-related JSON-RPC error codes.
@@ -248,6 +259,9 @@ fn parse_message(
                 Some(AcpEvent::SessionCreated(r.session_id))
             }
             "session/cancel" => None, // Ignore legacy cancel responses
+            "session/list" => Some(AcpEvent::SessionList(
+                serde_json::to_string(&result).unwrap_or_default(),
+            )),
             "session/prompt" => {
                 let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     Ok(r) => r,
@@ -382,8 +396,35 @@ fn parse_message(
                         currency,
                     })
                 }
+                SessionUpdate::SessionInfoUpdate { title } => {
+                    Some(AcpEvent::SessionInfoUpdate(title))
+                }
                 SessionUpdate::Unknown => None,
             }
+        } else if method == "_kiro.dev/metadata" {
+            let params = msg.params?;
+            let pct = params
+                .get("contextUsagePercentage")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let credits = params
+                .get("meteringUsage")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|item| item.get("value"))
+                .and_then(|v| v.as_f64());
+            Some(AcpEvent::MetadataUpdate {
+                context_percentage: pct,
+                credits_used: credits,
+            })
+        } else if method == "_kiro.dev/compaction/status" {
+            let params = msg.params?;
+            let status = params
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            Some(AcpEvent::CompactionStatus(status))
         } else {
             None
         }
@@ -1036,5 +1077,95 @@ mod tests {
             &pending,
         );
         assert!(ev.is_none());
+    }
+
+    #[test]
+    fn parse_kiro_metadata_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"_kiro.dev/metadata","params":{"contextUsagePercentage":42.5,"meteringUsage":[{"value":1.25}]}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::MetadataUpdate {
+                context_percentage,
+                credits_used,
+            } => {
+                assert!((context_percentage - 42.5).abs() < f64::EPSILON);
+                assert_eq!(credits_used, Some(1.25));
+            }
+            _ => panic!("expected MetadataUpdate"),
+        }
+    }
+
+    #[test]
+    fn parse_kiro_metadata_without_credits() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"_kiro.dev/metadata","params":{"contextUsagePercentage":80.0}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::MetadataUpdate {
+                context_percentage,
+                credits_used,
+            } => {
+                assert!((context_percentage - 80.0).abs() < f64::EPSILON);
+                assert_eq!(credits_used, None);
+            }
+            _ => panic!("expected MetadataUpdate"),
+        }
+    }
+
+    #[test]
+    fn parse_session_info_update() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"session_info_update","title":"Implement auth flow"}}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SessionInfoUpdate(title) => assert_eq!(title, "Implement auth flow"),
+            _ => panic!("expected SessionInfoUpdate"),
+        }
+    }
+
+    #[test]
+    fn parse_compaction_status_notification() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"_kiro.dev/compaction/status","params":{"status":"in_progress"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::CompactionStatus(status) => assert_eq!(status, "in_progress"),
+            _ => panic!("expected CompactionStatus"),
+        }
+    }
+
+    #[test]
+    fn parse_session_list_response() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        pending
+            .lock()
+            .unwrap()
+            .insert(5, "session/list".to_string());
+
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":5,"result":{"sessions":[{"sessionId":"s1","title":"Fix bug","createdAt":"2025-01-01T00:00:00Z"}]}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::SessionList(json) => {
+                assert!(json.contains("s1"));
+                assert!(json.contains("Fix bug"));
+            }
+            _ => panic!("expected SessionList"),
+        }
     }
 }

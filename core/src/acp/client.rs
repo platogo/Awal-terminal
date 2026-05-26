@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::acp::protocol::{
     ContentBlock, JsonRpcRequest, JsonRpcResponseOut, SessionCancelParams,
-    SessionCancelSubagentParams, SessionNewParams, SessionPromptParams, SessionResumeParams,
-    SessionRewindParams, TextContent,
+    SessionCancelSubagentParams, SessionCloseParams, SessionListParams, SessionNewParams,
+    SessionPromptParams, SessionResumeParams, SessionRewindParams, TextContent,
 };
 use crate::acp::reader::AcpEvent;
 
@@ -145,6 +145,30 @@ impl AcpClient {
         let params = SessionRewindParams { session_id };
         self.send_request(
             "session/rewind",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Send session/close notification before destroying the client.
+    pub fn send_close(&mut self) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or("No active session".to_string())?;
+        let params = SessionCloseParams { session_id };
+        self.send_notification(
+            "session/close",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Request the list of available sessions.
+    pub fn send_list_sessions(&mut self) -> Result<(), String> {
+        let params = SessionListParams {
+            cwd: self.cwd.clone(),
+        };
+        self.send_request(
+            "session/list",
             Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
         )
     }
