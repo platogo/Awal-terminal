@@ -2688,6 +2688,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 input: tab.tokenTracker.currentInput,
                 output: tab.tokenTracker.totalOutput
             )
+            tab.aiSidePanel.updateActivityDisplay(
+                tools: tab.tokenTracker.toolCalls.count,
+                codeBlocks: 0,
+                diffs: 0
+            )
             tab.aiSidePanel.setRewindVisible(true)
             // Re-enable chat input after turn completes
             tab.chatInputView?.setEnabled(true)
@@ -2768,6 +2773,13 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.ensureToolCallStack()
             self?.toolCallStack?.addToolCall(state)
             tab?.tokenTracker.appendToolCall(state.title)
+            if let tab {
+                tab.aiSidePanel.updateActivityDisplay(
+                    tools: tab.tokenTracker.toolCalls.count,
+                    codeBlocks: 0,
+                    diffs: 0
+                )
+            }
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
             debugLog("ACP: tool call updated: \(id) status=\(status)")
