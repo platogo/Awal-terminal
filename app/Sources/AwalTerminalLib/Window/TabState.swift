@@ -24,6 +24,12 @@ class TabState {
     /// Per-tab ACP client for Kiro sessions.
     var acpClient: ACPClient?
 
+    /// Chat input view for ACP sessions.
+    var chatInputView: ChatInputView?
+
+    /// Constraint pinning splitContainer bottom (swapped when chat input is shown).
+    var splitBottomConstraint: NSLayoutConstraint?
+
     /// Project path for ACP sessions (used for tab title since PTY CWD is unavailable).
     var acpProjectPath: String?
 

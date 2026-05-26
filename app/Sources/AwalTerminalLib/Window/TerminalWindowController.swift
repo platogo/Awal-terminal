@@ -390,6 +390,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let bottomAnchorTarget = tab.statusBar.topAnchor
         #endif
 
+        let splitBottom = tab.splitContainer.bottomAnchor.constraint(equalTo: bottomAnchorTarget)
+        tab.splitBottomConstraint = splitBottom
+
         NSLayoutConstraint.activate([
             tab.statusBar.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
             tab.statusBar.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
@@ -406,8 +409,13 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.splitContainer.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
             tab.splitContainer.trailingAnchor.constraint(equalTo: tab.aiSidePanel.leadingAnchor),
             tab.splitContainer.topAnchor.constraint(equalTo: contentArea.topAnchor),
-            tab.splitContainer.bottomAnchor.constraint(equalTo: bottomAnchorTarget),
+            splitBottom,
         ])
+
+        // Re-install chat input if this tab has an active ACP session
+        if tab.chatInputView != nil {
+            installChatInput(for: tab, bottomAnchor: bottomAnchorTarget)
+        }
 
         window?.makeFirstResponder(tab.splitContainer.focusedTerminal)
         updateWindowTitle()
@@ -421,6 +429,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.splitContainer.removeFromSuperview()
         tab.statusBar.removeFromSuperview()
         tab.aiSidePanel.removeFromSuperview()
+        tab.chatInputView?.removeFromSuperview()
         #if DEBUG
         tab.debugConsole.removeFromSuperview()
         #endif
@@ -2352,6 +2361,66 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
     }
 
+    // MARK: - Chat Input
+
+    private func showChatInput(for tab: TabState) {
+        guard tab.chatInputView == nil else { return }
+        let input = ChatInputView()
+        input.onSubmit = { [weak self] text in
+            self?.sendACPPrompt(text)
+            tab.chatInputView?.setEnabled(false)
+        }
+        input.onCancel = { [weak self] in
+            self?.activeTab.acpClient?.cancel()
+        }
+        tab.chatInputView = input
+
+        // Only install if this tab is currently displayed
+        guard tab.splitContainer.superview === contentArea else { return }
+
+        #if DEBUG
+        let bottomAnchor = tab.debugConsole.topAnchor
+        #else
+        let bottomAnchor = tab.statusBar.topAnchor
+        #endif
+        installChatInput(for: tab, bottomAnchor: bottomAnchor)
+        input.focus()
+    }
+
+    private func installChatInput(for tab: TabState, bottomAnchor: NSLayoutYAxisAnchor) {
+        guard let input = tab.chatInputView else { return }
+        input.removeFromSuperview()
+        contentArea.addSubview(input)
+
+        // Swap splitContainer bottom from bottomAnchor to chatInput top
+        tab.splitBottomConstraint?.isActive = false
+        tab.splitBottomConstraint = tab.splitContainer.bottomAnchor.constraint(equalTo: input.topAnchor)
+        tab.splitBottomConstraint?.isActive = true
+
+        NSLayoutConstraint.activate([
+            input.leadingAnchor.constraint(equalTo: tab.splitContainer.leadingAnchor),
+            input.trailingAnchor.constraint(equalTo: tab.splitContainer.trailingAnchor),
+            input.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    private func hideChatInput(for tab: TabState) {
+        guard let input = tab.chatInputView else { return }
+        input.removeFromSuperview()
+        tab.chatInputView = nil
+
+        // Restore splitContainer bottom to the original anchor
+        guard tab.splitContainer.superview === contentArea else { return }
+        tab.splitBottomConstraint?.isActive = false
+        #if DEBUG
+        let bottomAnchor = tab.debugConsole.topAnchor
+        #else
+        let bottomAnchor = tab.statusBar.topAnchor
+        #endif
+        tab.splitBottomConstraint = tab.splitContainer.bottomAnchor.constraint(equalTo: bottomAnchor)
+        tab.splitBottomConstraint?.isActive = true
+    }
+
     // MARK: - ACP Client
 
     /// Start an ACP session with kiro-cli at the given path.
@@ -2499,6 +2568,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.acpClient?.destroy()
         tab.acpClient = nil
         tab.statusBar.setSessionMode("PTY")
+        hideChatInput(for: tab)
         flashStatusBar(message)
         // Launch Kiro in PTY mode via the terminal view
         let terminal = tab.splitContainer.focusedTerminal
@@ -2555,6 +2625,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 output: tab.tokenTracker.totalOutput
             )
             tab.aiSidePanel.setRewindVisible(true)
+            // Re-enable chat input after turn completes
+            tab.chatInputView?.setEnabled(true)
+            tab.chatInputView?.focus()
             // Save session metadata
             if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath ?? tab.acpProjectPath {
                 let info = SessionManager.SessionInfo(
@@ -2579,6 +2652,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
                 self?.feedToSurface(tab: tab, text: "\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
+                self?.showChatInput(for: tab)
             }
             // Load session history for the side panel
             if let tab, let cwd = tab.statusBar.currentPath {
@@ -2591,9 +2665,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 }
             }
         }
-        client.onCancelled = { [weak self] in
+        client.onCancelled = { [weak self, weak tab] in
             self?.toolCallStack?.clearAll()
             self?.flashStatusBar("Cancelled")
+            tab?.chatInputView?.setEnabled(true)
+            tab?.chatInputView?.focus()
         }
         client.onRecovering = { [weak self] in
             self?.flashStatusBar("ACP: Reconnecting...")
