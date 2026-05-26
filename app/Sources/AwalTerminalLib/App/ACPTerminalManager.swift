@@ -47,8 +47,8 @@ class ACPTerminalManager {
 
         let terminal = ManagedTerminal(id: id, process: process, outputPipe: pipe, outputByteLimit: outputByteLimit)
 
-        pipe.fileHandleForReading.readabilityHandler = { [weak terminal] handle in
-            guard let terminal else { return }
+        pipe.fileHandleForReading.readabilityHandler = { [weak self, weak terminal] handle in
+            guard let self, let terminal else { return }
             let data = handle.availableData
             guard !data.isEmpty else { return }
             self.queue.async(flags: .barrier) {
@@ -134,14 +134,36 @@ class ACPTerminalManager {
 
     func release(terminalId: String) -> Bool {
         var found = false
-        queue.async(flags: .barrier) {
+        queue.sync(flags: .barrier) {
             guard let terminal = self.terminals.removeValue(forKey: terminalId) else { return }
             found = true
+            let continuations = terminal.waitContinuations
+            terminal.waitContinuations.removeAll()
+            for cont in continuations {
+                DispatchQueue.main.async { cont(nil, nil) }
+            }
             if terminal.process.isRunning {
                 terminal.process.terminate()
             }
             terminal.outputPipe.fileHandleForReading.readabilityHandler = nil
         }
         return found
+    }
+
+    func releaseAll() {
+        queue.sync(flags: .barrier) {
+            for (_, terminal) in self.terminals {
+                let continuations = terminal.waitContinuations
+                terminal.waitContinuations.removeAll()
+                for cont in continuations {
+                    DispatchQueue.main.async { cont(nil, nil) }
+                }
+                terminal.outputPipe.fileHandleForReading.readabilityHandler = nil
+                if terminal.process.isRunning {
+                    terminal.process.terminate()
+                }
+            }
+            self.terminals.removeAll()
+        }
     }
 }

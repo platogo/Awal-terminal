@@ -527,6 +527,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
         if closingActiveTab {
             // Uninstall the tab being closed with cleanup
+            tabs[index].acpClient?.destroy()
             uninstallTab(tabs[index], cleanup: true)
             tabs.remove(at: index)
             activeTabIndex = min(index, tabs.count - 1)
@@ -2335,6 +2336,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func windowWillClose(_ notification: Notification) {
         debounceSaveTimer?.invalidate()
         periodicSaveTimer?.invalidate()
+        acpTerminalManager.releaseAll()
         // Cleanup all tabs before window closes
         for tab in tabs {
             tab.acpClient?.destroy()
