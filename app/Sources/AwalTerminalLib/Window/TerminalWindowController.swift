@@ -1243,7 +1243,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     }
 
     private func closeSubagentTabs(for masterTab: TabState) {
-        let subTabs = tabs.filter { $0.subagentId != nil && $0.groupID == masterTab.groupID }
+        let trackedIds = Set(masterTab.subagentTracker.subagents.keys)
+        let subTabs = tabs.filter { tab in
+            guard let sid = tab.subagentId else { return false }
+            return trackedIds.contains(sid)
+        }
         for subTab in subTabs.reversed() {
             if let idx = tabs.firstIndex(where: { $0.id == subTab.id }) {
                 performCloseTab(at: idx)
