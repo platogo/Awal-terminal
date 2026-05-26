@@ -1804,7 +1804,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.statusBar.update(
                 model: terminal.activeModelName,
                 provider: terminal.activeProvider,
-                cols: 0, rows: 0
+                cols: Int(terminal.termCols), rows: Int(terminal.termRows)
             )
         }
         if let s = terminal.surfacePointer {
@@ -2641,6 +2641,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         bytes.withUnsafeBufferPointer { ptr in
             at_surface_feed_bytes(s, ptr.baseAddress!, UInt32(ptr.count))
         }
+        terminal.updateCellBuffer()
+        terminal.needsRender = true
     }
 
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
@@ -2707,7 +2709,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 let terminal = tab.splitContainer.focusedTerminal
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
-                self?.feedToSurface(tab: tab, text: "\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
+                // Clear screen to remove loading message, then show session ready
+                self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
                 self?.showChatInput(for: tab)
             }
             // Load session history for the side panel
