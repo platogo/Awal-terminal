@@ -1671,8 +1671,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         terminal.onTerminalIdle = { [weak terminal, weak tab] in
             guard let terminal else { return }
             NotificationManager.shared.notifyIdleIfNeeded(modelName: terminal.activeModelName)
-            // Update side panel with latest analyzer data
-            tab?.aiSidePanel.updateFromSurface(terminal.surfacePointer)
+            // Don't overwrite ACP activity tracking with surface analysis
+            if tab?.acpClient == nil {
+                tab?.aiSidePanel.updateFromSurface(terminal.surfacePointer)
+            }
             // Update token display from per-tab TokenTracker
             if let tracker = tab?.tokenTracker {
                 tab?.aiSidePanel.updateTokenDisplay(
@@ -2771,17 +2773,18 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
         client.onToolCallStarted = { [weak self, weak tab] state in
+            guard let self, let tab else { return }
             debugLog("ACP: tool call started: \(state.title)")
-            self?.ensureToolCallStack()
-            self?.toolCallStack?.addToolCall(state)
-            tab?.tokenTracker.appendToolCall(state.title)
-            if let tab {
-                tab.aiSidePanel.updateActivityDisplay(
-                    tools: tab.tokenTracker.toolCalls.count,
-                    codeBlocks: 0,
-                    diffs: 0
-                )
-            }
+            self.ensureToolCallStack()
+            self.toolCallStack?.addToolCall(state)
+            tab.tokenTracker.appendToolCall(state.title)
+            tab.aiSidePanel.updateActivityDisplay(
+                tools: tab.tokenTracker.toolCalls.count,
+                codeBlocks: 0,
+                diffs: 0
+            )
+            // Show tool call title in terminal surface
+            self.feedToSurface(tab: tab, text: "\u{1b}[2m\u{25B6} \(state.title)\u{1b}[0m\n")
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
             debugLog("ACP: tool call updated: \(id) status=\(status)")
