@@ -36,6 +36,9 @@ class TabState {
     /// Project path for ACP sessions (used for tab title since PTY CWD is unavailable).
     var acpProjectPath: String?
 
+    /// Number of ACP reconnection attempts since last successful session.
+    var acpReconnectCount: Int = 0
+
     /// Per-tab tracker for files modified by the AI agent.
     let agentChanges = AgentChangesTracker()
 

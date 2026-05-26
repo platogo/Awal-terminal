@@ -2522,7 +2522,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 guard let self, let tab else { return }
                 debugLog("ACP: initialization timeout (30s)")
                 self.acpTimeoutTimer = nil
-                self.fallbackToPTY(tab: tab, message: "ACP: Connection timed out — switching to PTY mode")
+                self.showACPError(tab: tab, message: "ACP: Connection timed out")
             }
             timer.resume()
             acpTimeoutTimer = timer
@@ -2647,6 +2647,35 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
+    private func attemptACPReconnect(tab: TabState, sessionId: String) {
+        tab.acpReconnectCount += 1
+        if tab.acpReconnectCount > 3 {
+            showACPError(tab: tab, message: "ACP: Failed to reconnect after 3 attempts")
+            return
+        }
+        feedToSurface(tab: tab, text: "\u{1b}[2m\u{21BB} Reconnecting (attempt \(tab.acpReconnectCount)/3)...\u{1b}[0m\n")
+        let config = AppConfig.shared
+        let kiroPath = config.resolvedKiroACPBinaryPath
+        let cwd = tab.acpProjectPath ?? tab.statusBar.currentPath ?? "."
+        tab.acpClient?.destroy()
+        let client = ACPClient()
+        wireACPCallbacks(client, tab: tab)
+        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: config.kiroAgentEngine, trustTools: nil, tokenPath: config.resolvedKiroTokenPath) {
+            tab.acpClient = client
+        } else {
+            showACPError(tab: tab, message: "ACP: Failed to spawn kiro-cli for reconnection")
+        }
+    }
+
+    private func showACPError(tab: TabState, message: String) {
+        tab.acpClient?.destroy()
+        tab.acpClient = nil
+        feedToSurface(tab: tab, text: "\r\n\u{1b}[1;31m\u{2717} \(message)\u{1b}[0m\r\n")
+        tab.chatInputView?.setEnabled(false)
+        tab.chatInputView?.setPlaceholder(message)
+        tab.statusBar.setSessionMode("ERR")
+    }
+
     private func feedToSurface(tab: TabState, text: String) {
         let terminal = tab.splitContainer.focusedTerminal
         guard let s = terminal.surface else {
@@ -2731,6 +2760,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.acpTimeoutTimer = nil
             // Clear loading state on the terminal view
             if let tab {
+                tab.acpReconnectCount = 0
                 let terminal = tab.splitContainer.focusedTerminal
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
@@ -2768,21 +2798,25 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let tab else { return }
             self.acpTimeoutTimer?.cancel()
             self.acpTimeoutTimer = nil
-            self.fallbackToPTY(tab: tab, message: "ACP: Connection lost — switching to PTY mode")
+            self.showACPError(tab: tab, message: "ACP: Connection lost after 3 retries")
         }
         client.onProcessExited = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
             self.acpTimeoutTimer?.cancel()
             self.acpTimeoutTimer = nil
             self.toolCallStack?.clearAll()
-            self.fallbackToPTY(tab: tab, message: "ACP: Disconnected — switching to PTY mode")
+            if let sessionId = tab.acpClient?.sessionId {
+                self.attemptACPReconnect(tab: tab, sessionId: sessionId)
+            } else {
+                self.showACPError(tab: tab, message: "ACP session ended unexpectedly")
+            }
         }
         client.onAuthRequired = { [weak self, weak tab] msg in
             debugLog("ACP: auth required")
             guard let self, let tab else { return }
             self.acpTimeoutTimer?.cancel()
             self.acpTimeoutTimer = nil
-            self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
+            self.showACPError(tab: tab, message: "Authentication required — run `kiro-cli login` in a terminal")
         }
         client.onToolCallStarted = { [weak self, weak tab] state in
             guard let self, let tab else { return }
