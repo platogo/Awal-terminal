@@ -39,6 +39,11 @@ class ACPClient {
     var onSessionInfoUpdate: ((String) -> Void)?
     var onCompactionStatus: ((String) -> Void)?
     var onSessionList: ((String) -> Void)?
+    var onTerminalCreate: ((UInt64, String, String, [String], [(String, String)], String?, Int) -> Void)?
+    var onTerminalOutput: ((UInt64, String) -> Void)?
+    var onTerminalWaitForExit: ((UInt64, String) -> Void)?
+    var onTerminalKill: ((UInt64, String) -> Void)?
+    var onTerminalRelease: ((UInt64, String) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
@@ -249,6 +254,20 @@ class ACPClient {
     func respondFsWrite(requestId: UInt64, success: Bool) {
         guard let handle else { return }
         _ = at_acp_respond_fs_write(handle, requestId, success)
+    }
+
+    func respondJson(requestId: UInt64, json: String) {
+        guard let handle else { return }
+        json.withCString { ptr in
+            _ = at_acp_respond_json(handle, requestId, ptr)
+        }
+    }
+
+    func respondError(requestId: UInt64, code: Int64, message: String) {
+        guard let handle else { return }
+        message.withCString { ptr in
+            _ = at_acp_respond_error(handle, requestId, code, ptr)
+        }
     }
 
     func destroy() {
@@ -473,6 +492,57 @@ class ACPClient {
                 if let text { onCompactionStatus?(text) }
             case 26: // SessionList
                 if let text { onSessionList?(text) }
+            case 27: // TerminalCreate
+                guard let paramsJson = text, let meta = text2 else {
+                    debugLog("ACP poll: TerminalCreate event missing text/text2")
+                    break
+                }
+                let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count > 0, let requestId = UInt64(parts[0]) else {
+                    debugLog("ACP poll: TerminalCreate failed to parse requestId")
+                    break
+                }
+                let sessionId = parts.count > 1 ? String(parts[1]) : ""
+                // Parse JSON params
+                guard let data = paramsJson.data(using: .utf8),
+                      let params = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let command = params["command"] as? String else {
+                    debugLog("ACP poll: TerminalCreate failed to parse params JSON")
+                    break
+                }
+                let args = params["args"] as? [String] ?? []
+                let envObj = params["env"] as? [[Any]] ?? []
+                let env: [(String, String)] = envObj.compactMap { pair in
+                    guard pair.count == 2, let k = pair[0] as? String, let v = pair[1] as? String else { return nil }
+                    return (k, v)
+                }
+                let cwd = params["cwd"] as? String
+                let byteLimit = params["outputByteLimit"] as? Int ?? 0
+                onTerminalCreate?(requestId, sessionId, command, args, env, cwd, byteLimit)
+            case 28: // TerminalOutput
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalOutput event missing text/text2")
+                    break
+                }
+                onTerminalOutput?(requestId, terminalId)
+            case 29: // TerminalWaitForExit
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalWaitForExit event missing text/text2")
+                    break
+                }
+                onTerminalWaitForExit?(requestId, terminalId)
+            case 30: // TerminalKill
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalKill event missing text/text2")
+                    break
+                }
+                onTerminalKill?(requestId, terminalId)
+            case 31: // TerminalRelease
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalRelease event missing text/text2")
+                    break
+                }
+                onTerminalRelease?(requestId, terminalId)
             default:
                 break
             }

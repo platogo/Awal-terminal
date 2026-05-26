@@ -22,6 +22,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var periodicSaveTimer: Timer?
     private var toolCallStack: ToolCallStackView?
     private var pendingFsWrites: [UInt64: (path: String, content: String)] = [:]
+    private let acpTerminalManager = ACPTerminalManager()
     private var acpTimeoutTimer: DispatchSourceTimer?
 
     /// Exposed for keyboard shortcut interception from TerminalView.
@@ -2949,9 +2950,66 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 debugLog("ACP: failed to decode session list: \(error)")
             }
         }
+        client.onTerminalCreate = { [weak self] requestId, _, command, args, env, cwd, byteLimit in
+            guard let self else { return }
+            if let terminalId = self.acpTerminalManager.create(command: command, args: args, env: env, cwd: cwd, outputByteLimit: byteLimit) {
+                self.activeTab.acpClient?.respondJson(requestId: requestId, json: "{\"terminalId\":\"\(terminalId)\"}")
+            } else {
+                self.activeTab.acpClient?.respondError(requestId: requestId, code: -32000, message: "Failed to create terminal")
+            }
+        }
+        client.onTerminalOutput = { [weak self] requestId, terminalId in
+            guard let self, let result = self.acpTerminalManager.getOutput(terminalId: terminalId) else {
+                self?.activeTab.acpClient?.respondError(requestId: requestId, code: -32000, message: "Terminal not found")
+                return
+            }
+            var json = "{\"output\":\(Self.jsonEscape(result.output)),\"truncated\":\(result.truncated)"
+            if let exitCode = result.exitCode {
+                json += ",\"exitStatus\":{\"exitCode\":\(exitCode)}"
+            } else if let signal = result.signal {
+                json += ",\"exitStatus\":{\"signal\":\(signal)}"
+            }
+            json += "}"
+            self.activeTab.acpClient?.respondJson(requestId: requestId, json: json)
+        }
+        client.onTerminalWaitForExit = { [weak self] requestId, terminalId in
+            guard let self else { return }
+            self.acpTerminalManager.waitForExit(terminalId: terminalId) { [weak self] exitCode, signal in
+                var json = "{"
+                if let exitCode {
+                    json += "\"exitCode\":\(exitCode)"
+                } else {
+                    json += "\"exitCode\":null"
+                }
+                if let signal {
+                    json += ",\"signal\":\(signal)"
+                } else {
+                    json += ",\"signal\":null"
+                }
+                json += "}"
+                self?.activeTab.acpClient?.respondJson(requestId: requestId, json: json)
+            }
+        }
+        client.onTerminalKill = { [weak self] requestId, terminalId in
+            guard let self else { return }
+            _ = self.acpTerminalManager.kill(terminalId: terminalId)
+            self.activeTab.acpClient?.respondJson(requestId: requestId, json: "{}")
+        }
+        client.onTerminalRelease = { [weak self] requestId, terminalId in
+            guard let self else { return }
+            _ = self.acpTerminalManager.release(terminalId: terminalId)
+            self.activeTab.acpClient?.respondJson(requestId: requestId, json: "{}")
+        }
     }
 
     private var diffReviewPopover: NSPopover?
+
+    private static func jsonEscape(_ string: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: string) else {
+            return "\"\""
+        }
+        return String(data: data, encoding: .utf8) ?? "\"\""
+    }
 
     private func showDiffReview(requestId: UInt64, path: String, content: String, cwd: String) {
         // Dismiss existing diff review if any
