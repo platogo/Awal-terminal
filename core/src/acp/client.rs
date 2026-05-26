@@ -53,7 +53,7 @@ impl AcpClient {
             cwd: String::new(),
             resume_session_id: None,
             crash_count: 0,
-            max_retries: 0,
+            max_retries: 3,
         };
         client.send_initialize()?;
         Ok(client)
