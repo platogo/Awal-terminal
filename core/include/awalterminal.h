@@ -79,7 +79,8 @@ typedef struct CRegionSummary {
  *             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
  *             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
  *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
- *             17=Stderr, 18=ProtocolLog
+ *             17=Stderr, 18=ProtocolLog, 27=TerminalCreate, 28=TerminalOutput,
+ *             29=TerminalWaitForExit, 30=TerminalKill, 31=TerminalRelease
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -521,6 +522,21 @@ int32_t at_acp_respond_fs_read(struct ATAcpClient *client,
 int32_t at_acp_respond_fs_write(struct ATAcpClient *client,
                                 uint64_t request_id,
                                 bool success);
+
+/**
+ * Send an arbitrary JSON result for a server-to-client request.
+ */
+int32_t at_acp_respond_json(struct ATAcpClient *client,
+                            uint64_t request_id,
+                            const char *json);
+
+/**
+ * Send a JSON-RPC error response for a server-to-client request.
+ */
+int32_t at_acp_respond_error(struct ATAcpClient *client,
+                             uint64_t request_id,
+                             int64_t code,
+                             const char *message);
 
 /**
  * Get the current ACP state. Returns: 0=Initializing, 1=Ready, 2=Prompting, 3=Dead, 4=Recovering.
