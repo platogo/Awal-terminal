@@ -492,6 +492,16 @@ int32_t at_acp_cancel_subagent(struct ATAcpClient *client,
 int32_t at_acp_send_rewind(struct ATAcpClient *client);
 
 /**
+ * Send session/close notification. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_send_close(struct ATAcpClient *client);
+
+/**
+ * Request session list. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_send_list_sessions(struct ATAcpClient *client);
+
+/**
  * Respond to a permission request. Returns 0 on success, -1 on error.
  */
 int32_t at_acp_respond_permission(struct ATAcpClient *client,
