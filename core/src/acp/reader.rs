@@ -385,7 +385,7 @@ mod tests {
     fn parse_text_chunk_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -542,7 +542,7 @@ mod tests {
     fn parse_subagent_spawned_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_spawned","subagentId":"sub-1","name":"researcher","role":"code-review","parentSessionId":"s1","dependsOn":["sub-0"]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_spawned","subagentId":"sub-1","name":"researcher","role":"code-review","parentSessionId":"s1","dependsOn":["sub-0"]}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -568,7 +568,7 @@ mod tests {
     fn parse_subagent_progress_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_progress","subagentId":"sub-1","phase":"Analyzing files","tokensUsed":1500}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_progress","subagentId":"sub-1","phase":"Analyzing files","tokensUsed":1500}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -590,7 +590,7 @@ mod tests {
     fn parse_subagent_complete_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_complete","subagentId":"sub-1","tokensUsed":3200}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_complete","subagentId":"sub-1","tokensUsed":3200}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -610,7 +610,7 @@ mod tests {
     fn parse_subagent_error_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_error","subagentId":"sub-1","message":"timeout exceeded"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_error","subagentId":"sub-1","message":"timeout exceeded"}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -630,7 +630,7 @@ mod tests {
     fn parse_agent_thought_chunk() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -644,7 +644,7 @@ mod tests {
     fn parse_plan_update() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"plan","entries":[{"content":"Step 1","priority":"high","status":"in_progress"}]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"plan","entries":[{"content":"Step 1","priority":"high","status":"in_progress"}]}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -661,7 +661,7 @@ mod tests {
     fn parse_unknown_session_update_no_panic() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"some_future_thing","data":"whatever"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"some_future_thing","data":"whatever"}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending);
@@ -672,7 +672,7 @@ mod tests {
     fn parse_usage_update_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"usage_update","used":5000,"size":200000,"cost":{"amount":0.05,"currency":"USD"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":5000,"size":200000,"cost":{"amount":0.05,"currency":"USD"}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -696,7 +696,7 @@ mod tests {
     fn parse_image_content_in_agent_message() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"base64data","mimeType":"image/png"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"base64data","mimeType":"image/png"}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -762,7 +762,7 @@ mod tests {
 
         // 3. Text chunks
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -771,7 +771,7 @@ mod tests {
         }
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -803,7 +803,7 @@ mod tests {
 
         // 1. Tool call (pending)
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call","toolCallId":"tc-1","title":"Read file","kind":"read","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"Read file","kind":"read","status":"pending"}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -823,7 +823,7 @@ mod tests {
 
         // 2. Tool call update (in_progress)
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"in_progress"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"in_progress"}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -841,7 +841,7 @@ mod tests {
 
         // 3. Tool call update (completed with content)
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"file contents here"}}]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"file contents here"}}]}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -879,7 +879,7 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Let me analyze this..."}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Let me analyze this..."}}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -893,7 +893,7 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"plan","entries":[{"content":"Read the codebase","priority":"high","status":"completed"},{"content":"Implement changes","priority":"medium","status":"in_progress"}]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"plan","entries":[{"content":"Read the codebase","priority":"high","status":"completed"},{"content":"Implement changes","priority":"medium","status":"in_progress"}]}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -913,7 +913,7 @@ mod tests {
 
         // 1. Subagent spawned
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_spawned","subagentId":"sub-42","name":"code-reviewer","role":"review","parentSessionId":"s1","dependsOn":[]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_spawned","subagentId":"sub-42","name":"code-reviewer","role":"review","parentSessionId":"s1","dependsOn":[]}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -932,7 +932,7 @@ mod tests {
 
         // 2. Subagent progress
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_progress","subagentId":"sub-42","phase":"Reviewing files","tokensUsed":2000}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_progress","subagentId":"sub-42","phase":"Reviewing files","tokensUsed":2000}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -950,7 +950,7 @@ mod tests {
 
         // 3. Subagent complete
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_complete","subagentId":"sub-42","tokensUsed":4500}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_complete","subagentId":"sub-42","tokensUsed":4500}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -987,7 +987,7 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"quantum_teleport","data":{"qubits":42}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"quantum_teleport","data":{"qubits":42}}}}"#,
             &pending,
         );
         assert!(ev.is_none());

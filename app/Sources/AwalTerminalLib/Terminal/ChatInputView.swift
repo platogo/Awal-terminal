@@ -58,7 +58,7 @@ class ChatInputView: NSView, NSTextViewDelegate {
         textView.font = font
         textView.textColor = config.themeFg
         textView.insertionPointColor = config.themeFg
-        textView.backgroundColor = config.themeBg.blended(withFraction: 0.08, of: config.themeFg) ?? config.themeBg
+        textView.backgroundColor = config.themeBg
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -83,7 +83,6 @@ class ChatInputView: NSView, NSTextViewDelegate {
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.wantsLayer = true
-        scrollView.layer?.cornerRadius = 6
         scrollView.layer?.backgroundColor = textView.backgroundColor.cgColor
         addSubview(scrollView)
 
@@ -117,17 +116,17 @@ class ChatInputView: NSView, NSTextViewDelegate {
             separator.topAnchor.constraint(equalTo: topAnchor),
             separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 1),
+            separator.heightAnchor.constraint(equalToConstant: 0),
 
             scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 4),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 0),
             scrollView.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -4),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
 
             placeholderLabel.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 13),
             placeholderLabel.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 8),
 
-            sendButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            sendButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 0),
             sendButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             sendButton.widthAnchor.constraint(equalToConstant: 24),
             sendButton.heightAnchor.constraint(equalToConstant: 24),

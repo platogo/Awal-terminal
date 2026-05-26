@@ -2715,7 +2715,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 // Transition terminal out of menu state so rendering is unblocked
                 terminal.menuRenderPending = false
                 terminal.appState = .terminal
-                terminal.recalculateGridSize()
+                terminal.resizeImmediate()
                 // Clear screen to remove loading message, then show session ready
                 self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
                 self?.showChatInput(for: tab)

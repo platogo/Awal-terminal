@@ -128,7 +128,6 @@ pub struct PromptResponseWithCredits {
 pub struct SessionUpdateParams {
     #[allow(dead_code)]
     pub session_id: String,
-    #[serde(flatten)]
     pub update: SessionUpdate,
 }
 
@@ -253,7 +252,7 @@ mod tests {
 
     #[test]
     fn deserialize_session_update_text_chunk() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         match params.update {
             SessionUpdate::AgentMessageChunk { content } => match content {
@@ -266,14 +265,14 @@ mod tests {
 
     #[test]
     fn deserialize_session_update_turn_end() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"turn_end"}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"turn_end"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         assert!(matches!(params.update, SessionUpdate::TurnEnd));
     }
 
     #[test]
     fn deserialize_session_update_tool_call() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"in_progress"}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"in_progress"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         match params.update {
             SessionUpdate::ToolCall(tc) => {
@@ -341,7 +340,7 @@ mod tests {
 
     #[test]
     fn deserialize_unknown_session_update() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"some_future_variant"}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"some_future_variant"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         assert!(matches!(params.update, SessionUpdate::Unknown));
     }
