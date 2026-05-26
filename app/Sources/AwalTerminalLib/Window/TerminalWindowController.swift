@@ -1242,6 +1242,15 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tabs.first { $0.subagentId == id }
     }
 
+    private func closeSubagentTabs(for masterTab: TabState) {
+        let subTabs = tabs.filter { $0.subagentId != nil && $0.groupID == masterTab.groupID }
+        for subTab in subTabs.reversed() {
+            if let idx = tabs.firstIndex(where: { $0.id == subTab.id }) {
+                performCloseTab(at: idx)
+            }
+        }
+    }
+
     private func createSubagentTab(subagentId: String, name: String, role: String?) -> TabState {
         let tab = createTabState(isInitialTab: true)
         tab.subagentId = subagentId
@@ -1262,11 +1271,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     /// Close all completed subagent tabs in pipeline groups.
     func closeCompletedSubagentTabs() {
         let subagentTabs = tabs.enumerated().compactMap { (idx, tab) -> Int? in
-            guard tab.subagentId != nil else { return nil }
+            guard let subId = tab.subagentId else { return nil }
             // Check if the subagent is completed in any master tab's tracker
             let isComplete = tabs.contains { master in
                 master.subagentId == nil &&
-                master.subagentTracker.subagents[tab.subagentId!]?.isActive == false
+                master.subagentTracker.subagents[subId]?.isActive == false
             }
             return isComplete ? idx : nil
         }
@@ -2477,6 +2486,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         guard ModelCatalog.find("Kiro") != nil else { return }
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
+        closeSubagentTabs(for: tab)
         tab.subagentTracker.reset()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
@@ -2516,6 +2526,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let tab = activeTab
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
+        closeSubagentTabs(for: tab)
         tab.subagentTracker.reset()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
@@ -2788,20 +2799,20 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onSubagentProgress = { [weak self, weak tab] id, phase, tokens in
             tab?.subagentTracker.handleProgress(id: id, phase: phase, tokensUsed: tokens)
             if let self, let subTab = self.tabForSubagent(id) {
-                self.feedToSurface(tab: subTab, text: phase)
+                self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[2m\(phase)\u{1b}[0m")
             }
         }
         client.onSubagentComplete = { [weak self, weak tab] id, tokens in
             guard let self, let tab else { return }
             tab.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
 
-            if let subTab = self.tabForSubagent(id) {
+            let subTab = self.tabForSubagent(id)
+            if let subTab {
                 self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;32m✓ Subagent complete\u{1b}[0m\r\n")
             }
 
             // Update pipeline group progress (group is on subagent tabs)
-            let subagentGroupId = self.tabForSubagent(id)?.groupID
-            if let gid = subagentGroupId, let group = self.tabGroups.first(where: { $0.id == gid }) {
+            if let gid = subTab?.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
                 group.completedStages = tab.subagentTracker.subagents.values.filter { !$0.isActive }.count
                 if group.autoCloseOnComplete && group.completedStages >= group.totalStages && group.totalStages > 0 {
                     self.closePipelineGroup(group)
