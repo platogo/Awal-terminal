@@ -55,23 +55,6 @@ pub struct JsonRpcNotification {
 
 // --- ACP-specific types ---
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeParams {
-    pub protocol_version: String,
-    pub client_capabilities: ClientCapabilities,
-    pub client_info: ClientInfo,
-}
-
-#[derive(Serialize)]
-pub struct ClientCapabilities {}
-
-#[derive(Serialize)]
-pub struct ClientInfo {
-    pub name: String,
-    pub version: String,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
@@ -145,7 +128,6 @@ pub struct PromptResponseWithCredits {
 pub struct SessionUpdateParams {
     #[allow(dead_code)]
     pub session_id: String,
-    #[serde(flatten)]
     pub update: SessionUpdate,
 }
 
@@ -255,29 +237,22 @@ mod tests {
 
     #[test]
     fn serialize_initialize_request() {
-        let req = JsonRpcRequest::new(
-            1,
-            "initialize",
-            Some(
-                serde_json::to_value(InitializeParams {
-                    protocol_version: "2025-01-01".to_string(),
-                    client_capabilities: ClientCapabilities {},
-                    client_info: ClientInfo {
-                        name: "AwalTerminal".to_string(),
-                        version: "0.17.0".to_string(),
-                    },
-                })
-                .unwrap(),
-            ),
-        );
+        let params = serde_json::json!({
+            "protocolVersion": 1,
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+            "clientInfo": { "name": "AwalTerminal", "version": "0.17.0" }
+        });
+        let req = JsonRpcRequest::new(1, "initialize", Some(params));
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"method\":\"initialize\""));
-        assert!(json.contains("\"protocolVersion\":\"2025-01-01\""));
+        assert!(json.contains("\"protocolVersion\":1"));
+        assert!(!json.contains("\"protocolVersion\":\""));
+        assert!(json.contains("\"clientCapabilities\":{\"fs\":{\"readTextFile\":true,\"writeTextFile\":true},\"terminal\":false}"));
     }
 
     #[test]
     fn deserialize_session_update_text_chunk() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         match params.update {
             SessionUpdate::AgentMessageChunk { content } => match content {
@@ -290,14 +265,14 @@ mod tests {
 
     #[test]
     fn deserialize_session_update_turn_end() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"turn_end"}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"turn_end"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         assert!(matches!(params.update, SessionUpdate::TurnEnd));
     }
 
     #[test]
     fn deserialize_session_update_tool_call() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"in_progress"}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"in_progress"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         match params.update {
             SessionUpdate::ToolCall(tc) => {
@@ -365,7 +340,7 @@ mod tests {
 
     #[test]
     fn deserialize_unknown_session_update() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"some_future_variant"}"#;
+        let json = r#"{"sessionId":"abc","update":{"sessionUpdate":"some_future_variant"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         assert!(matches!(params.update, SessionUpdate::Unknown));
     }

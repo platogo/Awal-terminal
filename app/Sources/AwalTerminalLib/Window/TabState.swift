@@ -21,8 +21,17 @@ class TabState {
     /// Set when the user manually closes the AI side panel; prevents auto-reopen.
     var userClosedAIPanel = false
 
+    /// Subagent ID when this tab represents a spawned subagent (nil for master tabs).
+    var subagentId: String?
+
     /// Per-tab ACP client for Kiro sessions.
     var acpClient: ACPClient?
+
+    /// Chat input view for ACP sessions.
+    var chatInputView: ChatInputView?
+
+    /// Constraint pinning splitContainer bottom (swapped when chat input is shown).
+    var splitBottomConstraint: NSLayoutConstraint?
 
     /// Project path for ACP sessions (used for tab title since PTY CWD is unavailable).
     var acpProjectPath: String?

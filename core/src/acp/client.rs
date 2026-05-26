@@ -5,9 +5,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use crate::acp::protocol::{
-    ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
-    JsonRpcResponseOut, SessionCancelParams, SessionCancelSubagentParams, SessionNewParams,
-    SessionPromptParams, SessionResumeParams, SessionRewindParams, TextContent,
+    ContentBlock, JsonRpcRequest, JsonRpcResponseOut, SessionCancelParams,
+    SessionCancelSubagentParams, SessionNewParams, SessionPromptParams, SessionResumeParams,
+    SessionRewindParams, TextContent,
 };
 use crate::acp::reader::AcpEvent;
 
@@ -252,18 +252,12 @@ impl AcpClient {
     }
 
     fn send_initialize(&mut self) -> Result<(), String> {
-        let params = InitializeParams {
-            protocol_version: "2025-01-01".to_string(),
-            client_capabilities: ClientCapabilities {},
-            client_info: ClientInfo {
-                name: "AwalTerminal".to_string(),
-                version: "0.17.0".to_string(),
-            },
-        };
-        self.send_request(
-            "initialize",
-            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
-        )
+        let params = serde_json::json!({
+            "protocolVersion": 1,
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+            "clientInfo": { "name": "AwalTerminal", "version": env!("CARGO_PKG_VERSION") }
+        });
+        self.send_request("initialize", Some(params))
     }
 
     fn send_session_new(&mut self) -> Result<(), String> {
@@ -320,10 +314,16 @@ impl AcpClient {
         match event {
             AcpEvent::Initialized => {
                 // If resuming, send session/resume; otherwise send session/new
-                if let Some(sid) = self.resume_session_id.take() {
-                    let _ = self.send_resume(&sid);
+                let result = if let Some(sid) = self.resume_session_id.take() {
+                    self.send_resume(&sid)
                 } else {
-                    let _ = self.send_session_new();
+                    self.send_session_new()
+                };
+                if let Err(e) = result {
+                    let _ = self.tx.send(AcpEvent::Error(format!(
+                        "Failed to send session request after init: {e}"
+                    )));
+                    self.state = AcpState::Dead;
                 }
             }
             AcpEvent::SessionCreated(id) => {

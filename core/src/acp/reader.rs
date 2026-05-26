@@ -123,8 +123,9 @@ pub fn parse_line(
     let msg: RawMessage = match serde_json::from_str(line) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("[ACP reader] failed to parse line: {e}");
-            return None;
+            return Some(AcpEvent::ProtocolLog(format!(
+                "Failed to parse JSON line: {e}"
+            )));
         }
     };
     parse_message(msg, pending_methods)
@@ -138,11 +139,17 @@ fn parse_message(
     if let (Some(id), Some(method)) = (msg.id, msg.method.as_ref()) {
         match method.as_str() {
             "session/request_permission" => {
-                let params: RequestPermissionParams = match serde_json::from_value(msg.params?) {
+                let Some(params_val) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "request_permission id={id}: missing params"
+                    )));
+                };
+                let params: RequestPermissionParams = match serde_json::from_value(params_val) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse permission request: {e}");
-                        return None;
+                        return Some(AcpEvent::ProtocolLog(format!(
+                            "request_permission id={id}: failed to parse: {e}"
+                        )));
                     }
                 };
                 return Some(AcpEvent::PermissionRequest {
@@ -154,21 +161,41 @@ fn parse_message(
                 });
             }
             "fs/read_text_file" => {
-                let params: serde_json::Value = msg.params?;
-                let path = params.get("path")?.as_str()?.to_string();
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/read_text_file id={id}: missing params"
+                    )));
+                };
+                let Some(path) = params.get("path").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/read_text_file id={id}: missing or invalid 'path'"
+                    )));
+                };
                 return Some(AcpEvent::FsReadRequest {
                     request_id: id,
-                    path,
+                    path: path.to_string(),
                 });
             }
             "fs/write_text_file" => {
-                let params: serde_json::Value = msg.params?;
-                let path = params.get("path")?.as_str()?.to_string();
-                let content = params.get("content")?.as_str()?.to_string();
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/write_text_file id={id}: missing params"
+                    )));
+                };
+                let Some(path) = params.get("path").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/write_text_file id={id}: missing or invalid 'path'"
+                    )));
+                };
+                let Some(content) = params.get("content").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/write_text_file id={id}: missing or invalid 'content'"
+                    )));
+                };
                 return Some(AcpEvent::FsWriteRequest {
                     request_id: id,
-                    path,
-                    content,
+                    path: path.to_string(),
+                    content: content.to_string(),
                 });
             }
             _ => return None,
@@ -177,7 +204,14 @@ fn parse_message(
 
     if let Some(id) = msg.id {
         // This is a response to one of our requests
-        let method = pending_methods.lock().ok()?.remove(&id)?;
+        let method = match pending_methods.lock() {
+            Ok(mut map) => map.remove(&id)?,
+            Err(_) => {
+                return Some(AcpEvent::Error(
+                    "Internal error: pending_methods lock poisoned".to_string(),
+                ));
+            }
+        };
         if let Some(err) = msg.error {
             // Check if this is an auth error
             if is_auth_error(err.code, &err.message) {
@@ -185,13 +219,16 @@ fn parse_message(
             }
             return Some(AcpEvent::Error(format!("{}: {}", method, err.message)));
         }
-        let result = msg.result?;
+        let Some(result) = msg.result else {
+            return Some(AcpEvent::ProtocolLog(format!(
+                "{method} id={id}: response has neither result nor error"
+            )));
+        };
         match method.as_str() {
             "initialize" => {
                 let _: InitializeResult = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse initialize result: {e}");
                         return Some(AcpEvent::Error(format!(
                             "Failed to parse initialize response: {e}"
                         )));
@@ -203,7 +240,6 @@ fn parse_message(
                 let r: SessionNewResult = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse session/new result: {e}");
                         return Some(AcpEvent::Error(format!(
                             "Failed to parse session/new response: {e}"
                         )));
@@ -216,7 +252,6 @@ fn parse_message(
                 let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse session/prompt result: {e}");
                         return Some(AcpEvent::Error(format!(
                             "Failed to parse prompt response: {e}"
                         )));
@@ -235,8 +270,19 @@ fn parse_message(
     } else if let Some(method) = msg.method {
         // This is a notification
         if method == "session/update" {
-            let params = msg.params?;
-            let update: SessionUpdateParams = serde_json::from_value(params).ok()?;
+            let Some(params) = msg.params else {
+                return Some(AcpEvent::ProtocolLog(
+                    "session/update: missing params".to_string(),
+                ));
+            };
+            let update: SessionUpdateParams = match serde_json::from_value(params) {
+                Ok(u) => u,
+                Err(e) => {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "session/update: failed to deserialize: {e}"
+                    )));
+                }
+            };
             match update.update {
                 SessionUpdate::AgentMessageChunk { content } => match content {
                     ContentBlock::Text(tc) => Some(AcpEvent::TextChunk(tc.text)),
@@ -244,10 +290,9 @@ fn parse_message(
                         data: img.data,
                         mime_type: img.mime_type,
                     }),
-                    _ => {
-                        eprintln!("[ACP] Unsupported content type in AgentMessageChunk");
-                        None
-                    }
+                    _ => Some(AcpEvent::ProtocolLog(
+                        "Unsupported content type in AgentMessageChunk".to_string(),
+                    )),
                 },
                 SessionUpdate::AgentThoughtChunk { content } => match content {
                     ContentBlock::Text(t) => Some(AcpEvent::AgentThought(t.text)),
@@ -385,7 +430,7 @@ mod tests {
     fn parse_text_chunk_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -542,7 +587,7 @@ mod tests {
     fn parse_subagent_spawned_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_spawned","subagentId":"sub-1","name":"researcher","role":"code-review","parentSessionId":"s1","dependsOn":["sub-0"]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_spawned","subagentId":"sub-1","name":"researcher","role":"code-review","parentSessionId":"s1","dependsOn":["sub-0"]}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -568,7 +613,7 @@ mod tests {
     fn parse_subagent_progress_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_progress","subagentId":"sub-1","phase":"Analyzing files","tokensUsed":1500}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_progress","subagentId":"sub-1","phase":"Analyzing files","tokensUsed":1500}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -590,7 +635,7 @@ mod tests {
     fn parse_subagent_complete_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_complete","subagentId":"sub-1","tokensUsed":3200}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_complete","subagentId":"sub-1","tokensUsed":3200}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -610,7 +655,7 @@ mod tests {
     fn parse_subagent_error_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_error","subagentId":"sub-1","message":"timeout exceeded"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_error","subagentId":"sub-1","message":"timeout exceeded"}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -630,7 +675,7 @@ mod tests {
     fn parse_agent_thought_chunk() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -644,7 +689,7 @@ mod tests {
     fn parse_plan_update() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"plan","entries":[{"content":"Step 1","priority":"high","status":"in_progress"}]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"plan","entries":[{"content":"Step 1","priority":"high","status":"in_progress"}]}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -661,7 +706,7 @@ mod tests {
     fn parse_unknown_session_update_no_panic() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"some_future_thing","data":"whatever"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"some_future_thing","data":"whatever"}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending);
@@ -672,7 +717,7 @@ mod tests {
     fn parse_usage_update_notification() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"usage_update","used":5000,"size":200000,"cost":{"amount":0.05,"currency":"USD"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":5000,"size":200000,"cost":{"amount":0.05,"currency":"USD"}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -696,7 +741,7 @@ mod tests {
     fn parse_image_content_in_agent_message() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let msg: RawMessage = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"base64data","mimeType":"image/png"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"base64data","mimeType":"image/png"}}}}"#,
         )
         .unwrap();
         let event = parse_message(msg, &pending).unwrap();
@@ -762,7 +807,7 @@ mod tests {
 
         // 3. Text chunks
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "}}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -771,7 +816,7 @@ mod tests {
         }
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-abc123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -803,7 +848,7 @@ mod tests {
 
         // 1. Tool call (pending)
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call","toolCallId":"tc-1","title":"Read file","kind":"read","status":"pending"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"Read file","kind":"read","status":"pending"}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -823,7 +868,7 @@ mod tests {
 
         // 2. Tool call update (in_progress)
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"in_progress"}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"in_progress"}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -841,7 +886,7 @@ mod tests {
 
         // 3. Tool call update (completed with content)
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"file contents here"}}]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"file contents here"}}]}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -879,7 +924,7 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Let me analyze this..."}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Let me analyze this..."}}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -893,7 +938,7 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"plan","entries":[{"content":"Read the codebase","priority":"high","status":"completed"},{"content":"Implement changes","priority":"medium","status":"in_progress"}]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"plan","entries":[{"content":"Read the codebase","priority":"high","status":"completed"},{"content":"Implement changes","priority":"medium","status":"in_progress"}]}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -913,7 +958,7 @@ mod tests {
 
         // 1. Subagent spawned
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_spawned","subagentId":"sub-42","name":"code-reviewer","role":"review","parentSessionId":"s1","dependsOn":[]}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_spawned","subagentId":"sub-42","name":"code-reviewer","role":"review","parentSessionId":"s1","dependsOn":[]}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -932,7 +977,7 @@ mod tests {
 
         // 2. Subagent progress
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_progress","subagentId":"sub-42","phase":"Reviewing files","tokensUsed":2000}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_progress","subagentId":"sub-42","phase":"Reviewing files","tokensUsed":2000}}}"#,
             &pending,
         ).unwrap();
         match &ev {
@@ -950,7 +995,7 @@ mod tests {
 
         // 3. Subagent complete
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"subagent_complete","subagentId":"sub-42","tokensUsed":4500}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_complete","subagentId":"sub-42","tokensUsed":4500}}}"#,
             &pending,
         ).unwrap();
         match ev {
@@ -987,7 +1032,7 @@ mod tests {
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
         let ev = parse_line(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","sessionUpdate":"quantum_teleport","data":{"qubits":42}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"quantum_teleport","data":{"qubits":42}}}}"#,
             &pending,
         );
         assert!(ev.is_none());

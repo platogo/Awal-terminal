@@ -390,6 +390,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let bottomAnchorTarget = tab.statusBar.topAnchor
         #endif
 
+        let splitBottom = tab.splitContainer.bottomAnchor.constraint(equalTo: bottomAnchorTarget)
+        tab.splitBottomConstraint = splitBottom
+
         NSLayoutConstraint.activate([
             tab.statusBar.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
             tab.statusBar.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
@@ -406,8 +409,13 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.splitContainer.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
             tab.splitContainer.trailingAnchor.constraint(equalTo: tab.aiSidePanel.leadingAnchor),
             tab.splitContainer.topAnchor.constraint(equalTo: contentArea.topAnchor),
-            tab.splitContainer.bottomAnchor.constraint(equalTo: bottomAnchorTarget),
+            splitBottom,
         ])
+
+        // Re-install chat input if this tab has an active ACP session
+        if tab.chatInputView != nil {
+            installChatInput(for: tab, bottomAnchor: bottomAnchorTarget)
+        }
 
         window?.makeFirstResponder(tab.splitContainer.focusedTerminal)
         updateWindowTitle()
@@ -421,6 +429,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.splitContainer.removeFromSuperview()
         tab.statusBar.removeFromSuperview()
         tab.aiSidePanel.removeFromSuperview()
+        tab.chatInputView?.removeFromSuperview()
         #if DEBUG
         tab.debugConsole.removeFromSuperview()
         #endif
@@ -479,7 +488,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func closeTab(at index: Int) {
         guard index >= 0 && index < tabs.count else { return }
 
-        if AppConfig.shared.tabsConfirmClose {
+        if AppConfig.shared.tabsConfirmClose && tabs[index].subagentId == nil {
             let alert = NSAlert()
             alert.messageText = "Close this tab?"
             alert.informativeText = "The running process in this tab will be terminated."
@@ -1227,6 +1236,64 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         deleteGroup(group, closeTabs: true)
     }
 
+    // MARK: - Subagent Tabs
+
+    private func tabForSubagent(_ id: String) -> TabState? {
+        tabs.first { $0.subagentId == id }
+    }
+
+    private func closeSubagentTabs(for masterTab: TabState) {
+        let trackedIds = Set(masterTab.subagentTracker.subagents.keys)
+        let subTabs = tabs.filter { tab in
+            guard let sid = tab.subagentId else { return false }
+            return trackedIds.contains(sid)
+        }
+        for subTab in subTabs.reversed() {
+            if let idx = tabs.firstIndex(where: { $0.id == subTab.id }) {
+                performCloseTab(at: idx)
+            }
+        }
+    }
+
+    private func createSubagentTab(subagentId: String, name: String, role: String?) -> TabState {
+        let tab = createTabState(isInitialTab: true)
+        tab.subagentId = subagentId
+        tab.customTitle = name
+
+        // Transition terminal out of menu state for subagent output
+        let terminal = tab.splitContainer.focusedTerminal
+        terminal.appState = .terminal
+        terminal.menuRenderPending = false
+        terminal.cursorVisible = false
+
+        // Set up read-only chat input
+        let input = ChatInputView()
+        input.setEnabled(false)
+        input.setPlaceholder("Subagent output (read-only)")
+        tab.chatInputView = input
+
+        tabs.append(tab)
+        // Do NOT switch to the new tab — stay on master
+        reloadTabBar()
+        return tab
+    }
+
+    /// Close all completed subagent tabs in pipeline groups.
+    func closeCompletedSubagentTabs() {
+        let subagentTabs = tabs.enumerated().compactMap { (idx, tab) -> Int? in
+            guard let subId = tab.subagentId else { return nil }
+            // Check if the subagent is completed in any master tab's tracker
+            let isComplete = tabs.contains { master in
+                master.subagentId == nil &&
+                master.subagentTracker.subagents[subId]?.isActive == false
+            }
+            return isComplete ? idx : nil
+        }
+        for idx in subagentTabs.reversed() {
+            performCloseTab(at: idx)
+        }
+    }
+
     func addTab(at index: Int, toGroup group: TabGroup) {
         guard index >= 0 && index < tabs.count else { return }
         let tab = tabs[index]
@@ -1614,8 +1681,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         terminal.onTerminalIdle = { [weak terminal, weak tab] in
             guard let terminal else { return }
             NotificationManager.shared.notifyIdleIfNeeded(modelName: terminal.activeModelName)
-            // Update side panel with latest analyzer data
-            tab?.aiSidePanel.updateFromSurface(terminal.surfacePointer)
+            // Don't overwrite ACP activity tracking with surface analysis
+            if tab?.acpClient == nil {
+                tab?.aiSidePanel.updateFromSurface(terminal.surfacePointer)
+            }
             // Update token display from per-tab TokenTracker
             if let tracker = tab?.tokenTracker {
                 tab?.aiSidePanel.updateTokenDisplay(
@@ -1734,12 +1803,6 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             let kiroPath = AppConfig.shared.kiroBinaryPath ?? "kiro-cli"
             self.resumeACPSession(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId)
         }
-        tab.aiSidePanel.onRewind = { [weak self, weak tab] in
-            guard let tab else { return }
-            if tab.acpClient?.sendRewind() != true {
-                self?.flashStatusBar("ACP: Rewind failed")
-            }
-        }
     }
 
     private func handleFocusChanged(_ terminal: TerminalView, tab: TabState) {
@@ -1747,7 +1810,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             tab.statusBar.update(
                 model: terminal.activeModelName,
                 provider: terminal.activeProvider,
-                cols: 0, rows: 0
+                cols: Int(terminal.termCols), rows: Int(terminal.termRows)
             )
         }
         if let s = terminal.surfacePointer {
@@ -2352,6 +2415,79 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         }
     }
 
+    // MARK: - Chat Input
+
+    private func showChatInput(for tab: TabState) {
+        guard tab.chatInputView == nil else { return }
+        let input = ChatInputView()
+        input.onSubmit = { [weak self, weak tab] text in
+            guard let self, let tab else { return }
+            self.sendACPPrompt(text)
+            // Only disable if prompt was actually sent (sendACPPrompt re-enables on failure)
+            if tab.acpClient?.isPrompting == true {
+                tab.chatInputView?.setEnabled(false)
+            }
+        }
+        input.onCancel = { [weak tab] in
+            guard let tab else { return }
+            if tab.acpClient?.isPrompting == true {
+                _ = tab.acpClient?.cancel()
+            }
+        }
+        input.onRewind = { [weak self, weak tab] in
+            guard let tab else { return }
+            if tab.acpClient?.sendRewind() != true {
+                self?.flashStatusBar("ACP: Rewind failed")
+            }
+        }
+        tab.chatInputView = input
+
+        // Only install if this tab is currently displayed
+        guard tab.splitContainer.superview === contentArea else { return }
+
+        #if DEBUG
+        let bottomAnchor = tab.debugConsole.topAnchor
+        #else
+        let bottomAnchor = tab.statusBar.topAnchor
+        #endif
+        installChatInput(for: tab, bottomAnchor: bottomAnchor)
+        input.focus()
+    }
+
+    private func installChatInput(for tab: TabState, bottomAnchor: NSLayoutYAxisAnchor) {
+        guard let input = tab.chatInputView else { return }
+        input.removeFromSuperview()
+        contentArea.addSubview(input)
+
+        // Swap splitContainer bottom from bottomAnchor to chatInput top
+        tab.splitBottomConstraint?.isActive = false
+        tab.splitBottomConstraint = tab.splitContainer.bottomAnchor.constraint(equalTo: input.topAnchor)
+        tab.splitBottomConstraint?.isActive = true
+
+        NSLayoutConstraint.activate([
+            input.leadingAnchor.constraint(equalTo: tab.splitContainer.leadingAnchor),
+            input.trailingAnchor.constraint(equalTo: tab.splitContainer.trailingAnchor),
+            input.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    private func hideChatInput(for tab: TabState) {
+        guard let input = tab.chatInputView else { return }
+        input.removeFromSuperview()
+        tab.chatInputView = nil
+
+        // Restore splitContainer bottom to the original anchor
+        guard tab.splitContainer.superview === contentArea else { return }
+        tab.splitBottomConstraint?.isActive = false
+        #if DEBUG
+        let bottomAnchor = tab.debugConsole.topAnchor
+        #else
+        let bottomAnchor = tab.statusBar.topAnchor
+        #endif
+        tab.splitBottomConstraint = tab.splitContainer.bottomAnchor.constraint(equalTo: bottomAnchor)
+        tab.splitBottomConstraint?.isActive = true
+    }
+
     // MARK: - ACP Client
 
     /// Start an ACP session with kiro-cli at the given path.
@@ -2365,6 +2501,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         guard ModelCatalog.find("Kiro") != nil else { return }
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
+        closeSubagentTabs(for: tab)
         tab.subagentTracker.reset()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
@@ -2376,7 +2513,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let tokenPath = config.resolvedKiroTokenPath
         let acpBinary = config.resolvedKiroACPBinaryPath
         debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") trust=\(trustTools ?? "safe") token=\(tokenPath ?? "nil")")
-        if client.spawn(kiroPath: acpBinary, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+        let agent = config.kiroDefaultAgent ?? "master"
+        if client.spawn(kiroPath: acpBinary, cwd: cwd, agent: agent, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             debugLog("ACP: spawn succeeded")
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
@@ -2404,6 +2542,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let tab = activeTab
         tab.acpProjectPath = cwd
         tab.acpClient?.destroy()
+        closeSubagentTabs(for: tab)
         tab.subagentTracker.reset()
         let client = ACPClient()
         wireACPCallbacks(client, tab: tab)
@@ -2485,11 +2624,18 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func sendACPPrompt(_ text: String) {
         guard let acpClient = activeTab.acpClient else {
             flashStatusBar("ACP: No active session")
+            activeTab.chatInputView?.setEnabled(true)
+            activeTab.chatInputView?.focus()
             return
         }
-        activeTab.aiSidePanel.setRewindVisible(false)
+        // Close completed subagent tabs from previous orchestration
+        closeCompletedSubagentTabs()
+        feedToSurface(tab: activeTab, text: "\r\n\u{1b}[1;34m> \u{1b}[0m" + text + "\r\n")
+        activeTab.chatInputView?.setRewindVisible(false)
         if !acpClient.sendPrompt(text) {
             flashStatusBar("ACP: Failed to send prompt")
+            activeTab.chatInputView?.setEnabled(true)
+            activeTab.chatInputView?.focus()
         }
     }
 
@@ -2498,6 +2644,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.acpClient?.destroy()
         tab.acpClient = nil
         tab.statusBar.setSessionMode("PTY")
+        hideChatInput(for: tab)
         flashStatusBar(message)
         // Launch Kiro in PTY mode via the terminal view
         let terminal = tab.splitContainer.focusedTerminal
@@ -2506,11 +2653,29 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
+    private func feedToSurface(tab: TabState, text: String) {
+        let terminal = tab.splitContainer.focusedTerminal
+        guard let s = terminal.surface else {
+            debugLog("feedToSurface: terminal surface is nil, dropping \(text.count) chars")
+            return
+        }
+        // ACP mode has no PTY, so simulate ONLCR: ensure every \n is preceded by \r
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+                            .replacingOccurrences(of: "\n", with: "\r\n")
+        let bytes = Array(normalized.utf8)
+        guard !bytes.isEmpty else { return }
+        bytes.withUnsafeBufferPointer { ptr in
+            at_surface_feed_bytes(s, ptr.baseAddress!, UInt32(ptr.count))
+        }
+        terminal.updateCellBuffer()
+        terminal.needsRender = true
+    }
+
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
         client.onTextChunk = { [weak self, weak tab, weak client] text in
-            guard let tab, let client else { return }
+            guard let self, let tab, let client else { return }
             debugLog("ACP: text chunk: \(text)")
-            self?.flashStatusBar(text)
+            self.feedToSurface(tab: tab, text: text)
             tab.tokenTracker.updateFromACP(
                 inputChars: client.totalCharsSent,
                 outputChars: client.totalCharsReceived
@@ -2520,6 +2685,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 output: tab.tokenTracker.totalOutput
             )
         }
+        client.onAgentThought = { [weak self, weak tab] text in
+            guard let self, let tab else { return }
+            self.feedToSurface(tab: tab, text: "\u{1b}[2;3m" + text + "\u{1b}[0m")
+        }
         client.onError = { [weak self] msg in
             debugLog("ACP: error: \(msg)")
             self?.flashStatusBar("ACP Error: \(msg)")
@@ -2527,19 +2696,27 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onTurnEnd = { [weak self, weak tab] _ in
             debugLog("ACP: turn end")
             guard let self, let tab else { return }
+            self.feedToSurface(tab: tab, text: "\r\n\u{1b}[2m\u{2500}\u{2500}\u{2500}\u{1b}[0m\r\n")
             if let credits = tab.acpClient?.lastTurnCredits, credits > 0 {
                 tab.tokenTracker.addCredits(credits)
             }
             if tab.subagentTracker.activeCount == 0 {
                 self.toolCallStack?.clearAll()
             }
-            self.flashStatusBar("ACP: Turn complete")
             tab.tokenTracker.incrementTurns()
             tab.aiSidePanel.updateTokenDisplay(
                 input: tab.tokenTracker.currentInput,
                 output: tab.tokenTracker.totalOutput
             )
-            tab.aiSidePanel.setRewindVisible(true)
+            tab.aiSidePanel.updateActivityDisplay(
+                tools: tab.tokenTracker.toolCalls.count,
+                codeBlocks: 0,
+                diffs: 0
+            )
+            tab.chatInputView?.setRewindVisible(true)
+            // Re-enable chat input after turn completes
+            tab.chatInputView?.setEnabled(true)
+            tab.chatInputView?.focus()
             // Save session metadata
             if let sid = tab.acpClient?.sessionId, let cwd = tab.statusBar.currentPath ?? tab.acpProjectPath {
                 let info = SessionManager.SessionInfo(
@@ -2563,8 +2740,16 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 let terminal = tab.splitContainer.focusedTerminal
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
+                // Transition terminal out of menu state so rendering is unblocked
+                terminal.menuRenderPending = false
+                terminal.appState = .terminal
+                terminal.cursorVisible = false
+                terminal.resizeImmediate()
+                // Clear screen to remove loading message, then show session ready
+                self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[?25l\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
+                terminal.onSessionChanged?("Kiro", "kiro-cli", Int(terminal.termCols), Int(terminal.termRows))
+                self?.showChatInput(for: tab)
             }
-            self?.flashStatusBar("ACP: Session ready")
             // Load session history for the side panel
             if let tab, let cwd = tab.statusBar.currentPath {
                 let sessions = SessionManager.shared.loadACPSessions(projectPath: cwd)
@@ -2572,13 +2757,15 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 // Show rewind button if resuming a session with history
                 if let sid = tab.acpClient?.getSessionId(),
                    sessions.contains(where: { $0.id == sid && $0.turns > 0 }) {
-                    tab.aiSidePanel.setRewindVisible(true)
+                    tab.chatInputView?.setRewindVisible(true)
                 }
             }
         }
-        client.onCancelled = { [weak self] in
+        client.onCancelled = { [weak self, weak tab] in
             self?.toolCallStack?.clearAll()
             self?.flashStatusBar("Cancelled")
+            tab?.chatInputView?.setEnabled(true)
+            tab?.chatInputView?.focus()
         }
         client.onRecovering = { [weak self] in
             self?.flashStatusBar("ACP: Reconnecting...")
@@ -2604,10 +2791,18 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
         }
         client.onToolCallStarted = { [weak self, weak tab] state in
+            guard let self, let tab else { return }
             debugLog("ACP: tool call started: \(state.title)")
-            self?.ensureToolCallStack()
-            self?.toolCallStack?.addToolCall(state)
-            tab?.tokenTracker.appendToolCall(state.title)
+            self.ensureToolCallStack()
+            self.toolCallStack?.addToolCall(state)
+            tab.tokenTracker.appendToolCall(state.title)
+            tab.aiSidePanel.updateActivityDisplay(
+                tools: tab.tokenTracker.toolCalls.count,
+                codeBlocks: 0,
+                diffs: 0
+            )
+            // Show tool call title in terminal surface
+            self.feedToSurface(tab: tab, text: "\u{1b}[2m\u{25B6} \(state.title)\u{1b}[0m\n")
         }
         client.onToolCallUpdated = { [weak self] id, status, content in
             debugLog("ACP: tool call updated: \(id) status=\(status)")
@@ -2632,13 +2827,16 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             }
         }
         client.onSubagentSpawned = { [weak self, weak tab] id, name, role, parentSid, deps in
-            guard let tab else { return }
+            guard let self, let tab else { return }
             tab.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
 
+            // Create a linked subagent tab
+            let subTab = self.createSubagentTab(subagentId: id, name: name, role: role)
+
             // Auto-group: find or create a pipeline group for this parentSessionId
-            if let self, let sessionId = parentSid {
+            if let sessionId = parentSid {
                 let group = self.findOrCreatePipelineGroup(sessionId: sessionId, role: role)
-                tab.groupID = group.id
+                subTab.groupID = group.id
                 group.totalStages = tab.subagentTracker.subagents.count
                 if group.color == nil, let stageColor = PipelineStage.from(role: role)?.color {
                     group.color = stageColor
@@ -2646,15 +2844,23 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.reloadTabBar()
             }
         }
-        client.onSubagentProgress = { [weak tab] id, phase, tokens in
+        client.onSubagentProgress = { [weak self, weak tab] id, phase, tokens in
             tab?.subagentTracker.handleProgress(id: id, phase: phase, tokensUsed: tokens)
+            if let self, let subTab = self.tabForSubagent(id) {
+                self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[2m\(phase)\u{1b}[0m")
+            }
         }
         client.onSubagentComplete = { [weak self, weak tab] id, tokens in
-            guard let tab else { return }
+            guard let self, let tab else { return }
             tab.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
 
-            // Update pipeline group progress
-            if let self, let gid = tab.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
+            let subTab = self.tabForSubagent(id)
+            if let subTab {
+                self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;32m✓ Subagent complete\u{1b}[0m\r\n")
+            }
+
+            // Update pipeline group progress (group is on subagent tabs)
+            if let gid = subTab?.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
                 group.completedStages = tab.subagentTracker.subagents.values.filter { !$0.isActive }.count
                 if group.autoCloseOnComplete && group.completedStages >= group.totalStages && group.totalStages > 0 {
                     self.closePipelineGroup(group)
@@ -2662,8 +2868,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.reloadTabBar()
             }
         }
-        client.onSubagentError = { [weak tab] id, message in
+        client.onSubagentError = { [weak self, weak tab] id, message in
             tab?.subagentTracker.handleError(id: id, message: message)
+            if let self, let subTab = self.tabForSubagent(id) {
+                self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;31m✗ Error: \(message)\u{1b}[0m\r\n")
+            }
         }
     }
 

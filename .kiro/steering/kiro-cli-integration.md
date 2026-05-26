@@ -12,6 +12,11 @@ Routing: `ModelCatalog` sets `prefersACP: true` for Kiro → `TerminalView+Menu.
 - Lifecycle: `initialize` → `session/new` (or `session/resume`) → `session/prompt` (repeating) → `session/cancel`
 - Additional methods: `session/cancelSubagent`, `session/rewind`
 - Streaming: `session/update` notifications with variants: `agent_message_chunk`, `tool_call`, `tool_call_update`, `turn_end`, `subagent_spawned`, `subagent_progress`, `subagent_complete`, `subagent_error`
+- **Wire format for `session/update`**: notifications use a nested `"update"` object inside `params`:
+  ```json
+  {"method":"session/update","params":{"sessionId":"...","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"..."}}}}
+  ```
+  The `SessionUpdateParams` struct uses a named `update` field (NOT `#[serde(flatten)]`). Using flatten silently drops all events.
 - Server→Client requests: `session/request_permission`, `fs/read_text_file`, `fs/write_text_file`
 - Turn result: `{"stopReason": "end_turn", "credits": f64}` — wire field is `credits`, Rust aliases to `creditsUsed`
 - Auth errors: codes -32001/-32002, also detected by keyword heuristics (`auth`, `unauthorized`, `login`, `credentials`)
@@ -80,6 +85,21 @@ This means:
 ## Configuration
 `~/.config/awal/config.toml` `[kiro]` section: `binary_path`, `default_agent`, `agent_engine`, `trust` (all|safe|none), `trusted_tools`, `permission_timeout`, `credit_cost_usd`, `token_path`.
 
+## ACP Mode vs PTY Mode (Terminal Surface)
+
+ACP mode uses the terminal surface as a view-only text renderer (no PTY attached). Key differences:
+
+| Concern | PTY Mode | ACP Mode |
+|---------|----------|----------|
+| Line endings | PTY does ONLCR | Must normalize `\n` → `\r\n` in `feedToSurface` |
+| Cursor | Visible + blinking | Hidden (`cursorVisible = false` + `ESC[?25l`) |
+| Grid resize | Debounced 150ms via `recalculateGridSize()` | Use `resizeImmediate()` for session ready |
+| Idle detection | `onTerminalIdle` fires from PTY read source | Never fires — skip `updateFromSurface` when `acpClient != nil` |
+| Session callbacks | `onSessionChanged` fires from shell spawn | Must call manually in `onSessionReady` |
+| Activity tracking | AI analyzer parses surface regions | Use `onToolCallStarted` → `updateActivityDisplay` directly |
+| Error surfacing | Visible in terminal output | `eprintln!` is invisible — use `AcpEvent::ProtocolLog` or `AcpEvent::Error` |
+| Subagent tabs | N/A | Must set `appState = .terminal`, `menuRenderPending = false` after creation |
+
 ## Known Gotchas
 - macOS GUI apps do NOT inherit shell PATH — `binary_path` MUST be absolute or the "Locate kiro-cli…" file picker triggers
 - ACP sessions have no PTY CWD — MUST use `acpProjectPath` for tab titles and working directory display
@@ -90,6 +110,10 @@ This means:
 - Process is placed in own process group (`setpgid(0,0)`) — termination uses `killpg(SIGTERM)`
 - No standalone protocol spec exists — `core/src/acp/protocol.rs` IS the source of truth
 - `--token-path` is required for IdC/SSO users when spawning from a GUI app
+- `session/update` wire format is NESTED (`params.update.sessionUpdate`) — using `#[serde(flatten)]` on `SessionUpdateParams` silently drops all events
+- `eprintln!` in Rust is invisible in GUI apps — always surface errors via `AcpEvent::ProtocolLog` or `AcpEvent::Error`
+- `onTerminalIdle` never fires in ACP mode — don't rely on it for activity tracking or side panel updates
+- Subagent tabs created with `isInitialTab: true` stay in menu state — must manually set `.terminal` + `menuRenderPending = false`
 
 ## Verification
 - `just test-rust` — ACP protocol serialization and reader unit tests

@@ -640,6 +640,21 @@ class TerminalView: NSView {
         }
     }
 
+    /// Resize the grid immediately, bypassing the debounce timer.
+    func resizeImmediate() {
+        guard let s = surface else { return }
+        ptyResizeTimer?.invalidate()
+        ptyResizeTimer = nil
+        let newCols = max(1, UInt32(bounds.width / cellWidth))
+        let newRows = max(1, UInt32(bounds.height / cellHeight))
+        if newCols != termCols || newRows != termRows {
+            termCols = newCols
+            termRows = newRows
+            at_surface_resize(s, termCols, termRows)
+            updateCellBuffer()
+        }
+    }
+
     func updateCellBuffer() {
         guard let s = surface else { return }
 
