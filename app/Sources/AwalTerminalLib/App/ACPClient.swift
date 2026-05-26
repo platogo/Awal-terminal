@@ -473,13 +473,18 @@ class ACPClient {
     /// Auto-approve file reads — read the file and respond immediately.
     private func handleFsRead(requestId: UInt64, path: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let maxSize: UInt64 = 10 * 1024 * 1024 // 10MB
+            let maxSize: Int = 10 * 1024 * 1024 // 10MB
             let content: String?
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-               let size = attrs[.size] as? UInt64, size > maxSize {
-                content = nil // Too large — respond with error
+            if let handle = FileHandle(forReadingAtPath: path) {
+                let data = handle.readData(ofLength: maxSize + 1)
+                handle.closeFile()
+                if data.count > maxSize {
+                    content = nil // Too large
+                } else {
+                    content = String(data: data, encoding: .utf8)
+                }
             } else {
-                content = try? String(contentsOfFile: path, encoding: .utf8)
+                content = nil
             }
             DispatchQueue.main.async {
                 self?.respondFsRead(requestId: requestId, content: content)

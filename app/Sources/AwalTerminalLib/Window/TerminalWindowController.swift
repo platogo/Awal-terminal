@@ -1256,6 +1256,12 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         tab.subagentId = subagentId
         tab.customTitle = name
 
+        // Transition terminal out of menu state for subagent output
+        let terminal = tab.splitContainer.focusedTerminal
+        terminal.appState = .terminal
+        terminal.menuRenderPending = false
+        terminal.cursorVisible = false
+
         // Set up read-only chat input
         let input = ChatInputView()
         input.setEnabled(false)
@@ -2413,7 +2419,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         input.onSubmit = { [weak self, weak tab] text in
             guard let self, let tab else { return }
             self.sendACPPrompt(text)
-            tab.chatInputView?.setEnabled(false)
+            // Only disable if prompt was actually sent (sendACPPrompt re-enables on failure)
+            if tab.acpClient?.isPrompting == true {
+                tab.chatInputView?.setEnabled(false)
+            }
         }
         input.onCancel = { [weak tab] in
             guard let tab else { return }
@@ -2611,6 +2620,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func sendACPPrompt(_ text: String) {
         guard let acpClient = activeTab.acpClient else {
             flashStatusBar("ACP: No active session")
+            activeTab.chatInputView?.setEnabled(true)
+            activeTab.chatInputView?.focus()
             return
         }
         // Close completed subagent tabs from previous orchestration
@@ -2619,6 +2630,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         activeTab.chatInputView?.setRewindVisible(false)
         if !acpClient.sendPrompt(text) {
             flashStatusBar("ACP: Failed to send prompt")
+            activeTab.chatInputView?.setEnabled(true)
+            activeTab.chatInputView?.focus()
         }
     }
 
@@ -2730,6 +2743,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 terminal.resizeImmediate()
                 // Clear screen to remove loading message, then show session ready
                 self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[?25l\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
+                terminal.onSessionChanged?("Kiro", "kiro-cli", Int(terminal.termCols), Int(terminal.termRows))
                 self?.showChatInput(for: tab)
             }
             // Load session history for the side panel
