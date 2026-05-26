@@ -402,7 +402,7 @@ class ACPClient {
                 if let message = text, let subId = text2 {
                     onSubagentError?(subId, message)
                 }
-case 17: // Stderr
+            case 17: // Stderr
                 if let text {
                     debugLog("ACP stderr: \(text)")
                 }
