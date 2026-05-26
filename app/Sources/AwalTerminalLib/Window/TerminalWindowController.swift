@@ -2635,7 +2635,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
     private func feedToSurface(tab: TabState, text: String) {
         let terminal = tab.splitContainer.focusedTerminal
-        guard let s = terminal.surface else { return }
+        guard let s = terminal.surface else {
+            debugLog("feedToSurface: terminal surface is nil, dropping \(text.count) chars")
+            return
+        }
         // ACP mode has no PTY, so simulate ONLCR: ensure every \n is preceded by \r
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
                             .replacingOccurrences(of: "\n", with: "\r\n")

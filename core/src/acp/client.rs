@@ -314,10 +314,16 @@ impl AcpClient {
         match event {
             AcpEvent::Initialized => {
                 // If resuming, send session/resume; otherwise send session/new
-                if let Some(sid) = self.resume_session_id.take() {
-                    let _ = self.send_resume(&sid);
+                let result = if let Some(sid) = self.resume_session_id.take() {
+                    self.send_resume(&sid)
                 } else {
-                    let _ = self.send_session_new();
+                    self.send_session_new()
+                };
+                if let Err(e) = result {
+                    let _ = self.tx.send(AcpEvent::Error(format!(
+                        "Failed to send session request after init: {e}"
+                    )));
+                    self.state = AcpState::Dead;
                 }
             }
             AcpEvent::SessionCreated(id) => {

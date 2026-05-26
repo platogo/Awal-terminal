@@ -85,7 +85,10 @@ class ACPClient {
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 
-        do { try proc.run() } catch { return false }
+        do { try proc.run() } catch {
+            debugLog("ACP: failed to launch process: \(error)")
+            return false
+        }
 
         self.process = proc
         self.stdinPipe = inPipe
@@ -287,34 +290,38 @@ class ACPClient {
                     onTextChunk?(text)
                 }
             case 3: // ToolCall
-                if let title = text, let meta = text2 {
-                    let parts = meta.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
-                    let id = parts.count > 0 ? String(parts[0]) : ""
-                    let statusStr = parts.count > 1 ? String(parts[1]) : ""
-                    let kindStr = parts.count > 2 ? String(parts[2]) : ""
-                    let kind = ToolCallKind(rawValue: kindStr) ?? .unknown
-                    let status: ToolCallStatus = statusStr == "completed" ? .completed
-                        : statusStr == "failed" ? .failed
-                        : statusStr == "running" ? .running : .pending
-                    let state = ToolCallState(id: id, title: title, kind: kind, status: status)
-                    activeToolCalls[id] = state
-                    onToolCallStarted?(state)
+                guard let title = text, let meta = text2 else {
+                    debugLog("ACP poll: ToolCall event missing text/text2")
+                    break
                 }
+                let parts = meta.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                let id = parts.count > 0 ? String(parts[0]) : ""
+                let statusStr = parts.count > 1 ? String(parts[1]) : ""
+                let kindStr = parts.count > 2 ? String(parts[2]) : ""
+                let kind = ToolCallKind(rawValue: kindStr) ?? .unknown
+                let status: ToolCallStatus = statusStr == "completed" ? .completed
+                    : statusStr == "failed" ? .failed
+                    : statusStr == "running" ? .running : .pending
+                let state = ToolCallState(id: id, title: title, kind: kind, status: status)
+                activeToolCalls[id] = state
+                onToolCallStarted?(state)
             case 4: // ToolCallUpdate
-                if let meta = text2 {
-                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-                    let id = parts.count > 0 ? String(parts[0]) : ""
-                    let statusStr = parts.count > 1 ? String(parts[1]) : ""
-                    let status: ToolCallStatus = statusStr == "completed" ? .completed
-                        : statusStr == "failed" ? .failed
-                        : statusStr == "running" ? .running : .pending
-                    let content = (text?.isEmpty == false) ? text : nil
-                    if let existing = activeToolCalls[id] {
-                        existing.status = status
-                        if let c = content { existing.content += c }
-                    }
-                    onToolCallUpdated?(id, status, content)
+                guard let meta = text2 else {
+                    debugLog("ACP poll: ToolCallUpdate event missing text2")
+                    break
                 }
+                let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                let id = parts.count > 0 ? String(parts[0]) : ""
+                let statusStr = parts.count > 1 ? String(parts[1]) : ""
+                let status: ToolCallStatus = statusStr == "completed" ? .completed
+                    : statusStr == "failed" ? .failed
+                    : statusStr == "running" ? .running : .pending
+                let content = (text?.isEmpty == false) ? text : nil
+                if let existing = activeToolCalls[id] {
+                    existing.status = status
+                    if let c = content { existing.content += c }
+                }
+                onToolCallUpdated?(id, status, content)
             case 5: // TurnEnd
                 isPrompting = false
                 activeToolCalls.removeAll()
@@ -336,19 +343,21 @@ class ACPClient {
                 let code = text.flatMap { Int32($0) }
                 onProcessExited?(code)
             case 8: // PermissionRequest
-                if let desc = text, let meta = text2 {
-                    let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
-                    let requestId = parts.count > 0 ? UInt64(parts[0]) ?? 0 : 0
-                    let toolCallId = parts.count > 1 ? String(parts[1]) : ""
-                    let toolName = parts.count > 2 ? String(parts[2]) : ""
-                    let kindStr = parts.count > 3 ? String(parts[3]) : ""
-                    let kind = ToolCallKind(rawValue: kindStr) ?? .unknown
-                    let request = PermissionRequest(
-                        requestId: requestId, toolCallId: toolCallId,
-                        toolName: toolName, description: desc, kind: kind
-                    )
-                    handlePermissionRequest(request)
+                guard let desc = text, let meta = text2 else {
+                    debugLog("ACP poll: PermissionRequest event missing text/text2")
+                    break
                 }
+                let parts = meta.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false)
+                let requestId = parts.count > 0 ? UInt64(parts[0]) ?? 0 : 0
+                let toolCallId = parts.count > 1 ? String(parts[1]) : ""
+                let toolName = parts.count > 2 ? String(parts[2]) : ""
+                let kindStr = parts.count > 3 ? String(parts[3]) : ""
+                let kind = ToolCallKind(rawValue: kindStr) ?? .unknown
+                let request = PermissionRequest(
+                    requestId: requestId, toolCallId: toolCallId,
+                    toolName: toolName, description: desc, kind: kind
+                )
+                handlePermissionRequest(request)
             case 9: // Cancelled
                 isPrompting = false
                 onCancelled?()
@@ -356,23 +365,27 @@ class ACPClient {
                 isPrompting = false
                 onAuthRequired?(text ?? "Authentication required")
             case 11: // FsReadRequest
-                if let path = text, let meta = text2, let requestId = UInt64(meta) {
-                    handleFsRead(requestId: requestId, path: path)
+                guard let path = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: FsReadRequest event missing text/text2 or invalid requestId")
+                    break
                 }
+                handleFsRead(requestId: requestId, path: path)
             case 12: // FsWriteRequest
-                if let content = text, let meta = text2 {
-                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-                    guard parts.count > 0, let requestId = UInt64(parts[0]) else {
-                        NSLog("[ACP] FsWriteRequest: failed to parse requestId, skipping")
-                        break
-                    }
-                    let path = parts.count > 1 ? String(parts[1]) : ""
-                    if let handler = onFsWriteRequest {
-                        handler(requestId, path, content)
-                    } else {
-                        // No handler — auto-deny
-                        respondFsWrite(requestId: requestId, success: false)
-                    }
+                guard let content = text, let meta = text2 else {
+                    debugLog("ACP poll: FsWriteRequest event missing text/text2")
+                    break
+                }
+                let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count > 0, let requestId = UInt64(parts[0]) else {
+                    debugLog("ACP poll: FsWriteRequest failed to parse requestId")
+                    break
+                }
+                let path = parts.count > 1 ? String(parts[1]) : ""
+                if let handler = onFsWriteRequest {
+                    handler(requestId, path, content)
+                } else {
+                    // No handler — auto-deny
+                    respondFsWrite(requestId: requestId, success: false)
                 }
             case 13: // SubagentSpawned
                 if let name = text, let meta = text2 {

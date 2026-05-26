@@ -123,8 +123,9 @@ pub fn parse_line(
     let msg: RawMessage = match serde_json::from_str(line) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("[ACP reader] failed to parse line: {e}");
-            return None;
+            return Some(AcpEvent::ProtocolLog(format!(
+                "Failed to parse JSON line: {e}"
+            )));
         }
     };
     parse_message(msg, pending_methods)
@@ -138,11 +139,17 @@ fn parse_message(
     if let (Some(id), Some(method)) = (msg.id, msg.method.as_ref()) {
         match method.as_str() {
             "session/request_permission" => {
-                let params: RequestPermissionParams = match serde_json::from_value(msg.params?) {
+                let Some(params_val) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "request_permission id={id}: missing params"
+                    )));
+                };
+                let params: RequestPermissionParams = match serde_json::from_value(params_val) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse permission request: {e}");
-                        return None;
+                        return Some(AcpEvent::ProtocolLog(format!(
+                            "request_permission id={id}: failed to parse: {e}"
+                        )));
                     }
                 };
                 return Some(AcpEvent::PermissionRequest {
@@ -154,21 +161,41 @@ fn parse_message(
                 });
             }
             "fs/read_text_file" => {
-                let params: serde_json::Value = msg.params?;
-                let path = params.get("path")?.as_str()?.to_string();
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/read_text_file id={id}: missing params"
+                    )));
+                };
+                let Some(path) = params.get("path").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/read_text_file id={id}: missing or invalid 'path'"
+                    )));
+                };
                 return Some(AcpEvent::FsReadRequest {
                     request_id: id,
-                    path,
+                    path: path.to_string(),
                 });
             }
             "fs/write_text_file" => {
-                let params: serde_json::Value = msg.params?;
-                let path = params.get("path")?.as_str()?.to_string();
-                let content = params.get("content")?.as_str()?.to_string();
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/write_text_file id={id}: missing params"
+                    )));
+                };
+                let Some(path) = params.get("path").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/write_text_file id={id}: missing or invalid 'path'"
+                    )));
+                };
+                let Some(content) = params.get("content").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "fs/write_text_file id={id}: missing or invalid 'content'"
+                    )));
+                };
                 return Some(AcpEvent::FsWriteRequest {
                     request_id: id,
-                    path,
-                    content,
+                    path: path.to_string(),
+                    content: content.to_string(),
                 });
             }
             _ => return None,
@@ -177,7 +204,14 @@ fn parse_message(
 
     if let Some(id) = msg.id {
         // This is a response to one of our requests
-        let method = pending_methods.lock().ok()?.remove(&id)?;
+        let method = match pending_methods.lock() {
+            Ok(mut map) => map.remove(&id)?,
+            Err(_) => {
+                return Some(AcpEvent::Error(
+                    "Internal error: pending_methods lock poisoned".to_string(),
+                ));
+            }
+        };
         if let Some(err) = msg.error {
             // Check if this is an auth error
             if is_auth_error(err.code, &err.message) {
@@ -185,13 +219,16 @@ fn parse_message(
             }
             return Some(AcpEvent::Error(format!("{}: {}", method, err.message)));
         }
-        let result = msg.result?;
+        let Some(result) = msg.result else {
+            return Some(AcpEvent::ProtocolLog(format!(
+                "{method} id={id}: response has neither result nor error"
+            )));
+        };
         match method.as_str() {
             "initialize" => {
                 let _: InitializeResult = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse initialize result: {e}");
                         return Some(AcpEvent::Error(format!(
                             "Failed to parse initialize response: {e}"
                         )));
@@ -203,7 +240,6 @@ fn parse_message(
                 let r: SessionNewResult = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse session/new result: {e}");
                         return Some(AcpEvent::Error(format!(
                             "Failed to parse session/new response: {e}"
                         )));
@@ -216,7 +252,6 @@ fn parse_message(
                 let r: PromptResponseWithCredits = match serde_json::from_value(result) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[ACP] Failed to parse session/prompt result: {e}");
                         return Some(AcpEvent::Error(format!(
                             "Failed to parse prompt response: {e}"
                         )));
@@ -235,8 +270,19 @@ fn parse_message(
     } else if let Some(method) = msg.method {
         // This is a notification
         if method == "session/update" {
-            let params = msg.params?;
-            let update: SessionUpdateParams = serde_json::from_value(params).ok()?;
+            let Some(params) = msg.params else {
+                return Some(AcpEvent::ProtocolLog(
+                    "session/update: missing params".to_string(),
+                ));
+            };
+            let update: SessionUpdateParams = match serde_json::from_value(params) {
+                Ok(u) => u,
+                Err(e) => {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "session/update: failed to deserialize: {e}"
+                    )));
+                }
+            };
             match update.update {
                 SessionUpdate::AgentMessageChunk { content } => match content {
                     ContentBlock::Text(tc) => Some(AcpEvent::TextChunk(tc.text)),
@@ -244,10 +290,9 @@ fn parse_message(
                         data: img.data,
                         mime_type: img.mime_type,
                     }),
-                    _ => {
-                        eprintln!("[ACP] Unsupported content type in AgentMessageChunk");
-                        None
-                    }
+                    _ => Some(AcpEvent::ProtocolLog(
+                        "Unsupported content type in AgentMessageChunk".to_string(),
+                    )),
                 },
                 SessionUpdate::AgentThoughtChunk { content } => match content {
                     ContentBlock::Text(t) => Some(AcpEvent::AgentThought(t.text)),
