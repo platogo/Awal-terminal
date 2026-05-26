@@ -264,6 +264,38 @@ impl AcpClient {
         self.write_response(&resp)
     }
 
+    /// Send an arbitrary JSON result for a server-to-client request.
+    pub fn respond_json(&mut self, request_id: u64, result_json: &str) -> Result<(), String> {
+        let result: serde_json::Value =
+            serde_json::from_str(result_json).map_err(|e| e.to_string())?;
+        let resp = JsonRpcResponseOut {
+            jsonrpc: "2.0",
+            id: request_id,
+            result: Some(result),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    /// Send a JSON-RPC error response for a server-to-client request.
+    pub fn respond_error(
+        &mut self,
+        request_id: u64,
+        code: i64,
+        message: &str,
+    ) -> Result<(), String> {
+        let resp = JsonRpcResponseOut {
+            jsonrpc: "2.0",
+            id: request_id,
+            result: None,
+            error: Some(crate::acp::protocol::JsonRpcErrorOut {
+                code,
+                message: message.to_string(),
+            }),
+        };
+        self.write_response(&resp)
+    }
+
     // --- Private ---
 
     fn write_response(&mut self, resp: &JsonRpcResponseOut) -> Result<(), String> {
@@ -278,7 +310,7 @@ impl AcpClient {
     fn send_initialize(&mut self) -> Result<(), String> {
         let params = serde_json::json!({
             "protocolVersion": 1,
-            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": true },
             "clientInfo": { "name": "AwalTerminal", "version": env!("CARGO_PKG_VERSION") }
         });
         self.send_request("initialize", Some(params))

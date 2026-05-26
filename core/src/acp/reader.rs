@@ -107,6 +107,36 @@ pub enum AcpEvent {
     CompactionStatus(String),
     /// Session list response (JSON array of sessions).
     SessionList(String),
+    /// terminal/create request
+    TerminalCreate {
+        request_id: u64,
+        session_id: String,
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        cwd: Option<String>,
+        output_byte_limit: Option<u64>,
+    },
+    /// terminal/output request
+    TerminalOutput {
+        request_id: u64,
+        terminal_id: String,
+    },
+    /// terminal/wait_for_exit request
+    TerminalWaitForExit {
+        request_id: u64,
+        terminal_id: String,
+    },
+    /// terminal/kill request
+    TerminalKill {
+        request_id: u64,
+        terminal_id: String,
+    },
+    /// terminal/release request
+    TerminalRelease {
+        request_id: u64,
+        terminal_id: String,
+    },
 }
 
 /// Auth-related JSON-RPC error codes.
@@ -207,6 +237,116 @@ fn parse_message(
                     request_id: id,
                     path: path.to_string(),
                     content: content.to_string(),
+                });
+            }
+            "terminal/create" => {
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/create id={id}: missing params"
+                    )));
+                };
+                let Some(command) = params.get("command").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/create id={id}: missing or invalid 'command'"
+                    )));
+                };
+                let session_id = params
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args = params
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let env = params
+                    .get("env")
+                    .and_then(|v| v.as_object())
+                    .map(|obj| {
+                        obj.iter()
+                            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let cwd = params.get("cwd").and_then(|v| v.as_str()).map(String::from);
+                let output_byte_limit = params.get("outputByteLimit").and_then(|v| v.as_u64());
+                return Some(AcpEvent::TerminalCreate {
+                    request_id: id,
+                    session_id,
+                    command: command.to_string(),
+                    args,
+                    env,
+                    cwd,
+                    output_byte_limit,
+                });
+            }
+            "terminal/output" => {
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/output id={id}: missing params"
+                    )));
+                };
+                let Some(terminal_id) = params.get("terminalId").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/output id={id}: missing or invalid 'terminalId'"
+                    )));
+                };
+                return Some(AcpEvent::TerminalOutput {
+                    request_id: id,
+                    terminal_id: terminal_id.to_string(),
+                });
+            }
+            "terminal/wait_for_exit" => {
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/wait_for_exit id={id}: missing params"
+                    )));
+                };
+                let Some(terminal_id) = params.get("terminalId").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/wait_for_exit id={id}: missing or invalid 'terminalId'"
+                    )));
+                };
+                return Some(AcpEvent::TerminalWaitForExit {
+                    request_id: id,
+                    terminal_id: terminal_id.to_string(),
+                });
+            }
+            "terminal/kill" => {
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/kill id={id}: missing params"
+                    )));
+                };
+                let Some(terminal_id) = params.get("terminalId").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/kill id={id}: missing or invalid 'terminalId'"
+                    )));
+                };
+                return Some(AcpEvent::TerminalKill {
+                    request_id: id,
+                    terminal_id: terminal_id.to_string(),
+                });
+            }
+            "terminal/release" => {
+                let Some(params) = msg.params else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/release id={id}: missing params"
+                    )));
+                };
+                let Some(terminal_id) = params.get("terminalId").and_then(|v| v.as_str()) else {
+                    return Some(AcpEvent::ProtocolLog(format!(
+                        "terminal/release id={id}: missing or invalid 'terminalId'"
+                    )));
+                };
+                return Some(AcpEvent::TerminalRelease {
+                    request_id: id,
+                    terminal_id: terminal_id.to_string(),
                 });
             }
             _ => return None,
@@ -1167,5 +1307,136 @@ mod tests {
             }
             _ => panic!("expected SessionList"),
         }
+    }
+
+    #[test]
+    fn parse_terminal_create_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":50,"method":"terminal/create","params":{"sessionId":"s1","command":"bash","args":["-c","echo hi"],"env":{"FOO":"bar"},"cwd":"/tmp","outputByteLimit":1024}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::TerminalCreate {
+                request_id,
+                session_id,
+                command,
+                args,
+                env,
+                cwd,
+                output_byte_limit,
+            } => {
+                assert_eq!(request_id, 50);
+                assert_eq!(session_id, "s1");
+                assert_eq!(command, "bash");
+                assert_eq!(args, vec!["-c", "echo hi"]);
+                assert_eq!(env, vec![("FOO".to_string(), "bar".to_string())]);
+                assert_eq!(cwd.as_deref(), Some("/tmp"));
+                assert_eq!(output_byte_limit, Some(1024));
+            }
+            _ => panic!("expected TerminalCreate"),
+        }
+    }
+
+    #[test]
+    fn parse_terminal_create_missing_command() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":51,"method":"terminal/create","params":{"sessionId":"s1"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        assert!(matches!(event, AcpEvent::ProtocolLog(_)));
+    }
+
+    #[test]
+    fn parse_terminal_output_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":52,"method":"terminal/output","params":{"terminalId":"t-123"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::TerminalOutput {
+                request_id,
+                terminal_id,
+            } => {
+                assert_eq!(request_id, 52);
+                assert_eq!(terminal_id, "t-123");
+            }
+            _ => panic!("expected TerminalOutput"),
+        }
+    }
+
+    #[test]
+    fn parse_terminal_wait_for_exit_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":53,"method":"terminal/wait_for_exit","params":{"terminalId":"t-123"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::TerminalWaitForExit {
+                request_id,
+                terminal_id,
+            } => {
+                assert_eq!(request_id, 53);
+                assert_eq!(terminal_id, "t-123");
+            }
+            _ => panic!("expected TerminalWaitForExit"),
+        }
+    }
+
+    #[test]
+    fn parse_terminal_kill_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":54,"method":"terminal/kill","params":{"terminalId":"t-123"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::TerminalKill {
+                request_id,
+                terminal_id,
+            } => {
+                assert_eq!(request_id, 54);
+                assert_eq!(terminal_id, "t-123");
+            }
+            _ => panic!("expected TerminalKill"),
+        }
+    }
+
+    #[test]
+    fn parse_terminal_release_request() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":55,"method":"terminal/release","params":{"terminalId":"t-123"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        match event {
+            AcpEvent::TerminalRelease {
+                request_id,
+                terminal_id,
+            } => {
+                assert_eq!(request_id, 55);
+                assert_eq!(terminal_id, "t-123");
+            }
+            _ => panic!("expected TerminalRelease"),
+        }
+    }
+
+    #[test]
+    fn parse_terminal_output_missing_params() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let msg: RawMessage =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":56,"method":"terminal/output"}"#)
+                .unwrap();
+        let event = parse_message(msg, &pending).unwrap();
+        assert!(matches!(event, AcpEvent::ProtocolLog(_)));
     }
 }

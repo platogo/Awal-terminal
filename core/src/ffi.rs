@@ -947,7 +947,8 @@ pub struct ATAcpClient(AcpClient);
 ///             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
 ///             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
 ///             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
-///             17=Stderr, 18=ProtocolLog
+///             17=Stderr, 18=ProtocolLog, 27=TerminalCreate, 28=TerminalOutput,
+///             29=TerminalWaitForExit, 30=TerminalKill, 31=TerminalRelease
 #[repr(C)]
 pub struct ATAcpEvent {
     pub event_type: u8,
@@ -1120,6 +1121,60 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     (25, string_to_c(status), std::ptr::null_mut())
                 }
                 AcpEvent::SessionList(json) => (26, string_to_c(json), std::ptr::null_mut()),
+                AcpEvent::TerminalCreate {
+                    request_id,
+                    session_id,
+                    command,
+                    args,
+                    env,
+                    cwd,
+                    output_byte_limit,
+                } => {
+                    let params_json = serde_json::json!({
+                        "command": command,
+                        "args": args,
+                        "env": env,
+                        "cwd": cwd,
+                        "outputByteLimit": output_byte_limit,
+                    });
+                    (
+                        27,
+                        string_to_c(&params_json.to_string()),
+                        string_to_c(&format!("{request_id}\t{session_id}")),
+                    )
+                }
+                AcpEvent::TerminalOutput {
+                    request_id,
+                    terminal_id,
+                } => (
+                    28,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::TerminalWaitForExit {
+                    request_id,
+                    terminal_id,
+                } => (
+                    29,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::TerminalKill {
+                    request_id,
+                    terminal_id,
+                } => (
+                    30,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::TerminalRelease {
+                    request_id,
+                    terminal_id,
+                } => (
+                    31,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1250,6 +1305,49 @@ pub extern "C" fn at_acp_respond_fs_write(
     match client.0.respond_fs_write(request_id, success, None) {
         Ok(()) => 0,
         Err(_) => -1,
+    }
+}
+
+/// Send an arbitrary JSON result for a server-to-client request.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_json(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    json: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if json.is_null() {
+        return -1;
+    }
+    let json_str = unsafe { std::ffi::CStr::from_ptr(json).to_str().unwrap_or("") };
+    match client.0.respond_json(request_id, json_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("at_acp_respond_json failed: {e}");
+            -1
+        }
+    }
+}
+
+/// Send a JSON-RPC error response for a server-to-client request.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_error(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    code: i64,
+    message: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if message.is_null() {
+        return -1;
+    }
+    let msg_str = unsafe { std::ffi::CStr::from_ptr(message).to_str().unwrap_or("") };
+    match client.0.respond_error(request_id, code, msg_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("at_acp_respond_error failed: {e}");
+            -1
+        }
     }
 }
 
