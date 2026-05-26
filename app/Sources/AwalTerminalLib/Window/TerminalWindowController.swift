@@ -532,6 +532,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             installTab(activeTab)
         } else {
             // Closing a background tab — cleanup its terminals
+            tabs[index].acpClient?.destroy()
             tabs[index].splitContainer.cleanupAllTerminals()
             tabs.remove(at: index)
             // Adjust activeTabIndex if the removed tab was before it
@@ -2335,6 +2336,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         periodicSaveTimer?.invalidate()
         // Cleanup all tabs before window closes
         for tab in tabs {
+            tab.acpClient?.destroy()
             tab.splitContainer.cleanupAllTerminals()
             cleanupWorktree(for: tab, force: false)
         }
@@ -2930,8 +2932,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let tab else { return }
             debugLog("ACP: session list received: \(json.prefix(200))")
             // Parse and update resume UI
-            if let data = json.data(using: .utf8),
-               let wrapper = try? JSONDecoder().decode(SessionListWrapper.self, from: data) {
+            guard let data = json.data(using: .utf8) else { return }
+            do {
+                let wrapper = try JSONDecoder().decode(SessionListWrapper.self, from: data)
                 let sessions = wrapper.sessions.map { entry in
                     SessionManager.SessionInfo(
                         id: entry.sessionId, model: "Kiro",
@@ -2942,6 +2945,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                     )
                 }
                 tab.aiSidePanel.updateSessionHistory(sessions: sessions)
+            } catch {
+                debugLog("ACP: failed to decode session list: \(error)")
             }
         }
     }

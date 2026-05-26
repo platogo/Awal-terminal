@@ -151,10 +151,10 @@ impl AcpClient {
 
     /// Send session/close notification before destroying the client.
     pub fn send_close(&mut self) -> Result<(), String> {
-        let session_id = self
-            .session_id
-            .clone()
-            .ok_or("No active session".to_string())?;
+        let session_id = match self.session_id.clone() {
+            Some(id) => id,
+            None => return Ok(()),
+        };
         let params = SessionCloseParams { session_id };
         self.send_notification(
             "session/close",
