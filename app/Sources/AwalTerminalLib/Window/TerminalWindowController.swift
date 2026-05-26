@@ -2498,7 +2498,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         let tokenPath = config.resolvedKiroTokenPath
         let acpBinary = config.resolvedKiroACPBinaryPath
         debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") trust=\(trustTools ?? "safe") token=\(tokenPath ?? "nil")")
-        if client.spawn(kiroPath: acpBinary, cwd: cwd, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+        let agent = config.kiroDefaultAgent ?? "master"
+        if client.spawn(kiroPath: acpBinary, cwd: cwd, agent: agent, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
             debugLog("ACP: spawn succeeded")
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
@@ -2723,9 +2724,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 // Transition terminal out of menu state so rendering is unblocked
                 terminal.menuRenderPending = false
                 terminal.appState = .terminal
+                terminal.cursorVisible = false
                 terminal.resizeImmediate()
                 // Clear screen to remove loading message, then show session ready
-                self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
+                self?.feedToSurface(tab: tab, text: "\u{1b}[2J\u{1b}[H\u{1b}[?25l\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
                 self?.showChatInput(for: tab)
             }
             // Load session history for the side panel
