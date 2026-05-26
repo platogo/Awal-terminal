@@ -44,6 +44,9 @@ class ACPClient {
     var onTerminalWaitForExit: ((UInt64, String) -> Void)?
     var onTerminalKill: ((UInt64, String) -> Void)?
     var onTerminalRelease: ((UInt64, String) -> Void)?
+    var onConfigOptions: ((String) -> Void)?
+    var onAvailableCommands: ((String) -> Void)?
+    var onMcpOAuthRequest: ((String) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
@@ -222,6 +225,22 @@ class ACPClient {
     func listSessions() -> Bool {
         guard let handle else { return false }
         return at_acp_send_list_sessions(handle) == 0
+    }
+
+    func setConfigOption(configId: String, value: String) -> Bool {
+        guard let handle else { return false }
+        return configId.withCString { idPtr in
+            value.withCString { valPtr in
+                at_acp_set_config_option(handle, idPtr, valPtr) == 0
+            }
+        }
+    }
+
+    func terminateSession(sessionId: String) -> Bool {
+        guard let handle else { return false }
+        return sessionId.withCString { ptr in
+            at_acp_terminate_session(handle, ptr) == 0
+        }
     }
 
     func forceKill() {
@@ -543,6 +562,12 @@ class ACPClient {
                     break
                 }
                 onTerminalRelease?(requestId, terminalId)
+            case 32: // ConfigOptionsReceived
+                if let text { onConfigOptions?(text) }
+            case 33: // AvailableCommands
+                if let text { onAvailableCommands?(text) }
+            case 34: // McpOAuthRequest
+                if let text { onMcpOAuthRequest?(text) }
             default:
                 break
             }

@@ -45,6 +45,12 @@ class TabState {
     /// Selected agent name for this tab's ACP session.
     var agentName: String?
 
+    /// Latest config options JSON from ACP.
+    var configOptionsJson: String?
+
+    /// Latest available commands JSON from ACP.
+    var availableCommandsJson: String?
+
     /// Stored constraint for animating side panel width.
     var sidePanelWidthConstraint: NSLayoutConstraint?
 

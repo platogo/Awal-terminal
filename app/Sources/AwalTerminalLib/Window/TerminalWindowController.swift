@@ -2952,6 +2952,17 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 debugLog("ACP: failed to decode session list: \(error)")
             }
         }
+        client.onConfigOptions = { [weak tab] json in
+            tab?.configOptionsJson = json
+        }
+        client.onAvailableCommands = { [weak tab] json in
+            tab?.availableCommandsJson = json
+        }
+        client.onMcpOAuthRequest = { url in
+            if let nsUrl = URL(string: url) {
+                NSWorkspace.shared.open(nsUrl)
+            }
+        }
         client.onTerminalCreate = { [weak self] requestId, _, command, args, env, cwd, byteLimit in
             guard let self else { return }
             if let terminalId = self.acpTerminalManager.create(command: command, args: args, env: env, cwd: cwd, outputByteLimit: byteLimit) {
