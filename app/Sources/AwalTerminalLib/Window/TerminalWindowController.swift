@@ -2487,6 +2487,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             flashStatusBar("ACP: No active session")
             return
         }
+        feedToSurface(tab: activeTab, text: "\r\n\u{1b}[1;34m> \u{1b}[0m" + text + "\r\n")
         activeTab.aiSidePanel.setRewindVisible(false)
         if !acpClient.sendPrompt(text) {
             flashStatusBar("ACP: Failed to send prompt")
@@ -2506,11 +2507,20 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
+    private func feedToSurface(tab: TabState, text: String) {
+        let terminal = tab.splitContainer.focusedTerminal
+        guard let s = terminal.surface else { return }
+        let bytes = Array(text.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            at_surface_feed_bytes(s, ptr.baseAddress!, UInt32(ptr.count))
+        }
+    }
+
     private func wireACPCallbacks(_ client: ACPClient, tab: TabState) {
         client.onTextChunk = { [weak self, weak tab, weak client] text in
-            guard let tab, let client else { return }
+            guard let self, let tab, let client else { return }
             debugLog("ACP: text chunk: \(text)")
-            self?.flashStatusBar(text)
+            self.feedToSurface(tab: tab, text: text)
             tab.tokenTracker.updateFromACP(
                 inputChars: client.totalCharsSent,
                 outputChars: client.totalCharsReceived
@@ -2520,6 +2530,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 output: tab.tokenTracker.totalOutput
             )
         }
+        client.onAgentThought = { [weak self, weak tab] text in
+            guard let self, let tab else { return }
+            self.feedToSurface(tab: tab, text: "\u{1b}[2;3m" + text + "\u{1b}[0m")
+        }
         client.onError = { [weak self] msg in
             debugLog("ACP: error: \(msg)")
             self?.flashStatusBar("ACP Error: \(msg)")
@@ -2527,13 +2541,13 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onTurnEnd = { [weak self, weak tab] _ in
             debugLog("ACP: turn end")
             guard let self, let tab else { return }
+            self.feedToSurface(tab: tab, text: "\r\n\u{1b}[2m\u{2500}\u{2500}\u{2500}\u{1b}[0m\r\n")
             if let credits = tab.acpClient?.lastTurnCredits, credits > 0 {
                 tab.tokenTracker.addCredits(credits)
             }
             if tab.subagentTracker.activeCount == 0 {
                 self.toolCallStack?.clearAll()
             }
-            self.flashStatusBar("ACP: Turn complete")
             tab.tokenTracker.incrementTurns()
             tab.aiSidePanel.updateTokenDisplay(
                 input: tab.tokenTracker.currentInput,
@@ -2563,8 +2577,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 let terminal = tab.splitContainer.focusedTerminal
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
+                self?.feedToSurface(tab: tab, text: "\u{1b}[2m\u{2713} Session ready\u{1b}[0m\r\n")
             }
-            self?.flashStatusBar("ACP: Session ready")
             // Load session history for the side panel
             if let tab, let cwd = tab.statusBar.currentPath {
                 let sessions = SessionManager.shared.loadACPSessions(projectPath: cwd)
