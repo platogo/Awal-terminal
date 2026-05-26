@@ -498,6 +498,19 @@ int32_t at_acp_send_rewind(struct ATAcpClient *client);
 int32_t at_acp_send_close(struct ATAcpClient *client);
 
 /**
+ * Send session/set_config_option. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_set_config_option(struct ATAcpClient *client,
+                                 const char *config_id,
+                                 const char *value);
+
+/**
+ * Send _session/terminate notification. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_terminate_session(struct ATAcpClient *client,
+                                 const char *session_id);
+
+/**
  * Request session list. Returns 0 on success, -1 on error.
  */
 int32_t at_acp_send_list_sessions(struct ATAcpClient *client);

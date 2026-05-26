@@ -64,6 +64,14 @@ impl AcpClient {
         use crate::acp::reader::parse_line;
         if let Some(event) = parse_line(line, &self.pending_methods) {
             self.handle_state_transition(&event);
+            // If session/new returned config_options, emit them after SessionCreated
+            if matches!(event, AcpEvent::SessionCreated(_)) {
+                if let Ok(mut map) = self.pending_methods.lock() {
+                    if let Some(json) = map.remove(&u64::MAX) {
+                        let _ = self.tx.send(AcpEvent::ConfigOptionsReceived(json));
+                    }
+                }
+            }
             let _ = self.tx.send(event);
         }
     }
@@ -160,6 +168,26 @@ impl AcpClient {
             "session/close",
             Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
         )
+    }
+
+    /// Send session/set_config_option request.
+    pub fn send_set_config_option(&mut self, config_id: &str, value: &str) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or("No active session".to_string())?;
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "configId": config_id,
+            "value": value,
+        });
+        self.send_request("session/set_config_option", Some(params))
+    }
+
+    /// Send _session/terminate notification for subagent termination.
+    pub fn send_terminate_session(&mut self, session_id: &str) -> Result<(), String> {
+        let params = serde_json::json!({ "sessionId": session_id });
+        self.send_notification("_session/terminate", Some(params))
     }
 
     /// Request the list of available sessions.

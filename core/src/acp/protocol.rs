@@ -77,6 +77,8 @@ pub struct SessionNewParams {
 #[serde(rename_all = "camelCase")]
 pub struct SessionNewResult {
     pub session_id: String,
+    #[serde(default)]
+    pub config_options: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -177,6 +179,18 @@ pub enum SessionUpdate {
     UsageUpdate(agent_client_protocol_schema::UsageUpdate),
     SessionInfoUpdate {
         title: String,
+    },
+    ConfigOptionUpdate {
+        #[serde(rename = "configOptions")]
+        config_options: Value,
+    },
+    AvailableCommandsUpdate {
+        #[serde(rename = "availableCommands")]
+        available_commands: Value,
+    },
+    CurrentModeUpdate {
+        #[serde(rename = "currentModeId")]
+        current_mode_id: String,
     },
     #[serde(other)]
     Unknown,

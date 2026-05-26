@@ -137,6 +137,12 @@ pub enum AcpEvent {
         request_id: u64,
         terminal_id: String,
     },
+    /// Config options received from session/new or config_option_update.
+    ConfigOptionsReceived(String),
+    /// Available commands update.
+    AvailableCommands(String),
+    /// MCP OAuth request — URL to open in browser.
+    McpOAuthRequest(String),
 }
 
 /// Auth-related JSON-RPC error codes.
@@ -396,6 +402,12 @@ fn parse_message(
                         )));
                     }
                 };
+                if let Some(opts) = r.config_options {
+                    let json = serde_json::to_string(&opts).unwrap_or_default();
+                    if let Ok(mut map) = pending_methods.lock() {
+                        map.insert(u64::MAX, json);
+                    }
+                }
                 Some(AcpEvent::SessionCreated(r.session_id))
             }
             "session/cancel" => None, // Ignore legacy cancel responses
@@ -539,6 +551,17 @@ fn parse_message(
                 SessionUpdate::SessionInfoUpdate { title } => {
                     Some(AcpEvent::SessionInfoUpdate(title))
                 }
+                SessionUpdate::ConfigOptionUpdate { config_options } => {
+                    let json = serde_json::to_string(&config_options).unwrap_or_default();
+                    Some(AcpEvent::ConfigOptionsReceived(json))
+                }
+                SessionUpdate::AvailableCommandsUpdate { available_commands } => {
+                    let json = serde_json::to_string(&available_commands).unwrap_or_default();
+                    Some(AcpEvent::AvailableCommands(json))
+                }
+                SessionUpdate::CurrentModeUpdate { current_mode_id } => Some(
+                    AcpEvent::ProtocolLog(format!("Mode changed: {current_mode_id}")),
+                ),
                 SessionUpdate::Unknown => None,
             }
         } else if method == "_kiro.dev/metadata" {
@@ -565,6 +588,12 @@ fn parse_message(
                 .unwrap_or("unknown")
                 .to_string();
             Some(AcpEvent::CompactionStatus(status))
+        } else if method == "_kiro.dev/mcp/oauth_request" {
+            let params = msg.params?;
+            let url = params.get("url").and_then(|v| v.as_str())?.to_string();
+            Some(AcpEvent::McpOAuthRequest(url))
+        } else if method == "_kiro.dev/mcp/server_initialized" {
+            Some(AcpEvent::ProtocolLog("MCP server initialized".to_string()))
         } else {
             None
         }

@@ -1175,6 +1175,11 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                     string_to_c(terminal_id),
                     string_to_c(&request_id.to_string()),
                 ),
+                AcpEvent::ConfigOptionsReceived(json) => {
+                    (32, string_to_c(json), std::ptr::null_mut())
+                }
+                AcpEvent::AvailableCommands(json) => (33, string_to_c(json), std::ptr::null_mut()),
+                AcpEvent::McpOAuthRequest(url) => (34, string_to_c(url), std::ptr::null_mut()),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1245,6 +1250,42 @@ pub extern "C" fn at_acp_send_rewind(client: *mut ATAcpClient) -> i32 {
 pub extern "C" fn at_acp_send_close(client: *mut ATAcpClient) -> i32 {
     let client = mut_ref_or!(client, -1);
     match client.0.send_close() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Send session/set_config_option. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_set_config_option(
+    client: *mut ATAcpClient,
+    config_id: *const c_char,
+    value: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if config_id.is_null() || value.is_null() {
+        return -1;
+    }
+    let id_str = unsafe { std::ffi::CStr::from_ptr(config_id).to_str().unwrap_or("") };
+    let val_str = unsafe { std::ffi::CStr::from_ptr(value).to_str().unwrap_or("") };
+    match client.0.send_set_config_option(id_str, val_str) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Send _session/terminate notification. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_terminate_session(
+    client: *mut ATAcpClient,
+    session_id: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if session_id.is_null() {
+        return -1;
+    }
+    let sid = unsafe { std::ffi::CStr::from_ptr(session_id).to_str().unwrap_or("") };
+    match client.0.send_terminate_session(sid) {
         Ok(()) => 0,
         Err(_) => -1,
     }
