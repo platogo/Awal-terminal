@@ -2366,12 +2366,16 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private func showChatInput(for tab: TabState) {
         guard tab.chatInputView == nil else { return }
         let input = ChatInputView()
-        input.onSubmit = { [weak self] text in
-            self?.sendACPPrompt(text)
+        input.onSubmit = { [weak self, weak tab] text in
+            guard let self, let tab else { return }
+            self.sendACPPrompt(text)
             tab.chatInputView?.setEnabled(false)
         }
-        input.onCancel = { [weak self] in
-            self?.activeTab.acpClient?.cancel()
+        input.onCancel = { [weak tab] in
+            guard let tab else { return }
+            if tab.acpClient?.isPrompting == true {
+                _ = tab.acpClient?.cancel()
+            }
         }
         tab.chatInputView = input
 

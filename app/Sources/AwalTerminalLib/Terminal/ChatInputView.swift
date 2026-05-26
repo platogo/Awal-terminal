@@ -1,5 +1,27 @@
 import AppKit
 
+private class ChatTextView: NSTextView {
+    var onCtrlC: (() -> Void)?
+    var onEscape: (() -> Void)?
+    var onSubmit: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control), event.charactersIgnoringModifiers == "c" {
+            onCtrlC?()
+            return
+        }
+        if event.keyCode == 53 {
+            onEscape?()
+            return
+        }
+        if event.keyCode == 36, !event.modifierFlags.contains(.shift) {
+            onSubmit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 class ChatInputView: NSView, NSTextViewDelegate {
 
     var onSubmit: ((String) -> Void)?
@@ -7,7 +29,7 @@ class ChatInputView: NSView, NSTextViewDelegate {
 
     private let separator = NSView()
     private let scrollView = NSScrollView()
-    private let textView = NSTextView()
+    private let textView = ChatTextView()
     private let sendButton = NSButton()
     private let placeholderLabel = NSTextField(labelWithString: "Send a message...")
     private var heightConstraint: NSLayoutConstraint!
@@ -48,6 +70,11 @@ class ChatInputView: NSView, NSTextViewDelegate {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
+        textView.setAccessibilityLabel("Chat message input")
+
+        textView.onCtrlC = { [weak self] in self?.handleCancel() }
+        textView.onEscape = { [weak self] in self?.handleCancel() }
+        textView.onSubmit = { [weak self] in self?.submit() }
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
@@ -136,32 +163,6 @@ class ChatInputView: NSView, NSTextViewDelegate {
         placeholderLabel.isHidden = hasText
         sendButton.isHidden = !hasText
         updateHeight()
-    }
-
-    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            // Shift+Enter inserts newline
-            if NSEvent.modifierFlags.contains(.shift) {
-                textView.insertNewlineIgnoringFieldEditor(nil)
-                return true
-            }
-            submit()
-            return true
-        }
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            handleCancel()
-            return true
-        }
-        return false
-    }
-
-    override func keyDown(with event: NSEvent) {
-        // Ctrl+C
-        if event.modifierFlags.contains(.control), event.charactersIgnoringModifiers == "c" {
-            handleCancel()
-            return
-        }
-        super.keyDown(with: event)
     }
 
     // MARK: - Private
