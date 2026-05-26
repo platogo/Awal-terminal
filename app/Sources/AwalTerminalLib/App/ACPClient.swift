@@ -31,6 +31,10 @@ class ACPClient {
     var onSubagentProgress: ((String, String, UInt64?) -> Void)?
     var onSubagentComplete: ((String, UInt64?) -> Void)?
     var onSubagentError: ((String, String) -> Void)?
+    var onAgentThought: ((String) -> Void)?
+    var onPlanUpdate: ((String) -> Void)?
+    var onImageContent: ((String, String) -> Void)?
+    var onUsageUpdate: ((UInt64, UInt64, Double?, String?) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
@@ -405,6 +409,28 @@ class ACPClient {
             case 18: // ProtocolLog
                 if let text {
                     debugLog("ACP protocol: \(text)")
+                }
+            case 19: // AgentThought
+                if let text { onAgentThought?(text) }
+            case 20: // PlanUpdate
+                if let text { onPlanUpdate?(text) }
+            case 21: // ImageContent
+                if let data = text, let mimeType = text2 {
+                    onImageContent?(data, mimeType)
+                }
+            case 22: // UsageUpdate
+                if let meta = text {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    let used = parts.count > 0 ? UInt64(parts[0]) ?? 0 : 0
+                    let size = parts.count > 1 ? UInt64(parts[1]) ?? 0 : 0
+                    var cost: Double?
+                    var currency: String?
+                    if let meta2 = text2 {
+                        let p2 = meta2.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                        cost = p2.count > 0 ? Double(p2[0]) : nil
+                        currency = p2.count > 1 && !p2[1].isEmpty ? String(p2[1]) : nil
+                    }
+                    onUsageUpdate?(used, size, cost, currency)
                 }
             default:
                 break

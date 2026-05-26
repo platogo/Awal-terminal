@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use agent_client_protocol_schema::{
+    ContentBlock, Plan, StopReason, TextContent, ToolCall, ToolCallId, ToolCallStatus,
+    ToolCallUpdate, ToolKind,
+};
+
 // --- JSON-RPC envelope types ---
 
 #[derive(Serialize)]
@@ -124,23 +129,15 @@ pub struct SessionPromptParams {
     pub prompt: Vec<ContentBlock>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ContentBlock {
-    #[serde(rename = "type")]
-    pub content_type: String,
-    pub text: String,
-}
-
+/// Wrapper around SDK `PromptResponse` that includes kiro-specific `credits` field.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionPromptResult {
-    pub stop_reason: Option<String>,
+pub struct PromptResponseWithCredits {
+    pub stop_reason: StopReason,
     #[serde(default, alias = "credits")]
     pub credits_used: Option<f64>,
-    /// Catch-all for unknown fields (temporary, for discovery).
-    #[serde(flatten)]
-    pub extra: std::collections::HashMap<String, Value>,
+    #[serde(default)]
+    pub usage: Option<agent_client_protocol_schema::Usage>,
 }
 
 #[derive(Deserialize)]
@@ -152,25 +149,20 @@ pub struct SessionUpdateParams {
     pub update: SessionUpdate,
 }
 
+/// Combined session update enum: SDK-defined variants use SDK types,
+/// kiro-specific variants (subagents, turn_end) are kept hand-rolled.
 #[derive(Deserialize)]
 #[serde(tag = "sessionUpdate", rename_all = "snake_case")]
 pub enum SessionUpdate {
     AgentMessageChunk {
         content: ContentBlock,
     },
-    ToolCall {
-        #[serde(rename = "toolCallId")]
-        tool_call_id: String,
-        title: String,
-        kind: Option<String>,
-        status: String,
+    AgentThoughtChunk {
+        content: ContentBlock,
     },
-    ToolCallUpdate {
-        #[serde(rename = "toolCallId")]
-        tool_call_id: String,
-        status: String,
-        content: Option<ContentBlock>,
-    },
+    ToolCall(ToolCall),
+    ToolCallUpdate(ToolCallUpdate),
+    Plan(Plan),
     TurnEnd,
     SubagentSpawned {
         #[serde(rename = "subagentId")]
@@ -200,6 +192,9 @@ pub enum SessionUpdate {
         subagent_id: String,
         message: String,
     },
+    UsageUpdate(agent_client_protocol_schema::UsageUpdate),
+    #[serde(other)]
+    Unknown,
 }
 
 // --- Permission request (server-to-client) ---
@@ -212,6 +207,16 @@ pub struct RequestPermissionParams {
     pub tool_name: String,
     pub description: String,
     pub kind: Option<String>,
+}
+
+// --- JSON-RPC notification (outgoing) ---
+
+#[derive(Serialize)]
+pub struct JsonRpcNotificationOut {
+    pub jsonrpc: &'static str,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
 }
 
 // --- JSON-RPC response (outgoing) ---
@@ -275,9 +280,10 @@ mod tests {
         let json = r#"{"sessionId":"abc","sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         match params.update {
-            SessionUpdate::AgentMessageChunk { content } => {
-                assert_eq!(content.text, "hello");
-            }
+            SessionUpdate::AgentMessageChunk { content } => match content {
+                ContentBlock::Text(tc) => assert_eq!(tc.text, "hello"),
+                _ => panic!("expected Text content block"),
+            },
             _ => panic!("expected AgentMessageChunk"),
         }
     }
@@ -291,18 +297,14 @@ mod tests {
 
     #[test]
     fn deserialize_session_update_tool_call() {
-        let json = r#"{"sessionId":"abc","sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"running"}"#;
+        let json = r#"{"sessionId":"abc","sessionUpdate":"tool_call","toolCallId":"t1","title":"Read file","kind":"read","status":"in_progress"}"#;
         let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
         match params.update {
-            SessionUpdate::ToolCall {
-                tool_call_id,
-                title,
-                status,
-                ..
-            } => {
-                assert_eq!(tool_call_id, "t1");
-                assert_eq!(title, "Read file");
-                assert_eq!(status, "running");
+            SessionUpdate::ToolCall(tc) => {
+                assert_eq!(tc.tool_call_id.0.as_ref(), "t1");
+                assert_eq!(tc.title, "Read file");
+                assert_eq!(tc.kind, ToolKind::Read);
+                assert_eq!(tc.status, ToolCallStatus::InProgress);
             }
             _ => panic!("expected ToolCall"),
         }
@@ -327,5 +329,59 @@ mod tests {
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["sessionId"], "sess-123");
         assert_eq!(json.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sdk_content_block_text_roundtrip() {
+        // Verify SDK ContentBlock serializes as {"type":"text","text":"..."}
+        let block = ContentBlock::Text(TextContent::new("hello"));
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["text"], "hello");
+
+        // And deserializes back
+        let parsed: ContentBlock = serde_json::from_value(json).unwrap();
+        match parsed {
+            ContentBlock::Text(tc) => assert_eq!(tc.text, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn deserialize_prompt_response_with_credits() {
+        let json = r#"{"stopReason":"end_turn","credits":1.5}"#;
+        let resp: PromptResponseWithCredits = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        assert_eq!(resp.credits_used, Some(1.5));
+    }
+
+    #[test]
+    fn deserialize_prompt_response_without_credits() {
+        let json = r#"{"stopReason":"cancelled"}"#;
+        let resp: PromptResponseWithCredits = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.stop_reason, StopReason::Cancelled);
+        assert_eq!(resp.credits_used, None);
+    }
+
+    #[test]
+    fn deserialize_unknown_session_update() {
+        let json = r#"{"sessionId":"abc","sessionUpdate":"some_future_variant"}"#;
+        let params: SessionUpdateParams = serde_json::from_str(json).unwrap();
+        assert!(matches!(params.update, SessionUpdate::Unknown));
+    }
+
+    #[test]
+    fn serialize_session_prompt_params_wire_format() {
+        let params = SessionPromptParams {
+            session_id: "sess-1".to_string(),
+            prompt: vec![ContentBlock::Text(TextContent::new("hello"))],
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["sessionId"], "sess-1");
+        // prompt field contains array of tagged content blocks
+        let prompt = json["prompt"].as_array().unwrap();
+        assert_eq!(prompt.len(), 1);
+        assert_eq!(prompt[0]["type"], "text");
+        assert_eq!(prompt[0]["text"], "hello");
     }
 }

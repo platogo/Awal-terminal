@@ -1081,6 +1081,27 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                 } => (16, string_to_c(message), string_to_c(subagent_id)),
                 AcpEvent::Stderr(msg) => (17, string_to_c(msg), std::ptr::null_mut()),
                 AcpEvent::ProtocolLog(msg) => (18, string_to_c(msg), std::ptr::null_mut()),
+                AcpEvent::AgentThought(t) => (19, string_to_c(t), std::ptr::null_mut()),
+                AcpEvent::PlanUpdate { entries_json } => {
+                    (20, string_to_c(entries_json), std::ptr::null_mut())
+                }
+                AcpEvent::ImageContent { data, mime_type } => {
+                    (21, string_to_c(data), string_to_c(mime_type))
+                }
+                AcpEvent::UsageUpdate {
+                    used_tokens,
+                    context_window_size,
+                    cost,
+                    currency,
+                } => (
+                    22,
+                    string_to_c(&format!("{used_tokens}\t{context_window_size}")),
+                    string_to_c(&format!(
+                        "{}\t{}",
+                        cost.map_or(String::new(), |c| c.to_string()),
+                        currency.as_deref().unwrap_or("")
+                    )),
+                ),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,

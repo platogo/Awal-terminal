@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::acp::protocol::{
     ClientCapabilities, ClientInfo, ContentBlock, InitializeParams, JsonRpcRequest,
     JsonRpcResponseOut, SessionCancelParams, SessionCancelSubagentParams, SessionNewParams,
-    SessionPromptParams, SessionResumeParams, SessionRewindParams,
+    SessionPromptParams, SessionResumeParams, SessionRewindParams, TextContent,
 };
 use crate::acp::reader::AcpEvent;
 
@@ -97,10 +97,7 @@ impl AcpClient {
             .ok_or("No active session".to_string())?;
         let params = SessionPromptParams {
             session_id,
-            prompt: vec![ContentBlock {
-                content_type: "text".to_string(),
-                text: text.to_string(),
-            }],
+            prompt: vec![ContentBlock::Text(TextContent::new(text))],
         };
         self.send_request(
             "session/prompt",
@@ -110,14 +107,14 @@ impl AcpClient {
         Ok(())
     }
 
-    /// Cancel the current operation by sending session/cancel.
+    /// Cancel the current operation by sending session/cancel (notification, no response expected).
     pub fn cancel(&mut self) -> Result<(), String> {
         let session_id = self
             .session_id
             .clone()
             .ok_or("No active session".to_string())?;
         let params = SessionCancelParams { session_id };
-        self.send_request(
+        self.send_notification(
             "session/cancel",
             Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
         )
@@ -298,6 +295,24 @@ impl AcpClient {
             .flush()
             .map_err(|e| format!("Flush failed: {e}"))?;
         let _ = self.tx.send(AcpEvent::ProtocolLog(format!("→ {method}")));
+        Ok(())
+    }
+
+    fn send_notification(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<(), String> {
+        let notif = crate::acp::protocol::JsonRpcNotificationOut {
+            jsonrpc: "2.0",
+            method: method.to_string(),
+            params,
+        };
+        let line = serde_json::to_string(&notif).map_err(|e| e.to_string())?;
+        writeln!(self.stdin, "{line}").map_err(|e| format!("Write failed: {e}"))?;
+        self.stdin
+            .flush()
+            .map_err(|e| format!("Flush failed: {e}"))?;
         Ok(())
     }
 
