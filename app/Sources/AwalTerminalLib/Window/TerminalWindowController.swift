@@ -488,7 +488,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func closeTab(at index: Int) {
         guard index >= 0 && index < tabs.count else { return }
 
-        if AppConfig.shared.tabsConfirmClose {
+        if AppConfig.shared.tabsConfirmClose && tabs[index].subagentId == nil {
             let alert = NSAlert()
             alert.messageText = "Close this tab?"
             alert.informativeText = "The running process in this tab will be terminated."
@@ -1234,6 +1234,45 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
     private func closePipelineGroup(_ group: TabGroup) {
         deleteGroup(group, closeTabs: true)
+    }
+
+    // MARK: - Subagent Tabs
+
+    private func tabForSubagent(_ id: String) -> TabState? {
+        tabs.first { $0.subagentId == id }
+    }
+
+    private func createSubagentTab(subagentId: String, name: String, role: String?) -> TabState {
+        let tab = createTabState(isInitialTab: true)
+        tab.subagentId = subagentId
+        tab.customTitle = name
+
+        // Set up read-only chat input
+        let input = ChatInputView()
+        input.setEnabled(false)
+        input.setPlaceholder("Subagent output (read-only)")
+        tab.chatInputView = input
+
+        tabs.append(tab)
+        // Do NOT switch to the new tab — stay on master
+        reloadTabBar()
+        return tab
+    }
+
+    /// Close all completed subagent tabs in pipeline groups.
+    func closeCompletedSubagentTabs() {
+        let subagentTabs = tabs.enumerated().compactMap { (idx, tab) -> Int? in
+            guard tab.subagentId != nil else { return nil }
+            // Check if the subagent is completed in any master tab's tracker
+            let isComplete = tabs.contains { master in
+                master.subagentId == nil &&
+                master.subagentTracker.subagents[tab.subagentId!]?.isActive == false
+            }
+            return isComplete ? idx : nil
+        }
+        for idx in subagentTabs.reversed() {
+            performCloseTab(at: idx)
+        }
     }
 
     func addTab(at index: Int, toGroup group: TabGroup) {
@@ -2560,6 +2599,8 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             flashStatusBar("ACP: No active session")
             return
         }
+        // Close completed subagent tabs from previous orchestration
+        closeCompletedSubagentTabs()
         feedToSurface(tab: activeTab, text: "\r\n\u{1b}[1;34m> \u{1b}[0m" + text + "\r\n")
         activeTab.aiSidePanel.setRewindVisible(false)
         if !acpClient.sendPrompt(text) {
@@ -2727,13 +2768,16 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             }
         }
         client.onSubagentSpawned = { [weak self, weak tab] id, name, role, parentSid, deps in
-            guard let tab else { return }
+            guard let self, let tab else { return }
             tab.subagentTracker.handleSpawned(id: id, name: name, role: role, parentSessionId: parentSid, dependsOn: deps)
 
+            // Create a linked subagent tab
+            let subTab = self.createSubagentTab(subagentId: id, name: name, role: role)
+
             // Auto-group: find or create a pipeline group for this parentSessionId
-            if let self, let sessionId = parentSid {
+            if let sessionId = parentSid {
                 let group = self.findOrCreatePipelineGroup(sessionId: sessionId, role: role)
-                tab.groupID = group.id
+                subTab.groupID = group.id
                 group.totalStages = tab.subagentTracker.subagents.count
                 if group.color == nil, let stageColor = PipelineStage.from(role: role)?.color {
                     group.color = stageColor
@@ -2741,15 +2785,23 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.reloadTabBar()
             }
         }
-        client.onSubagentProgress = { [weak tab] id, phase, tokens in
+        client.onSubagentProgress = { [weak self, weak tab] id, phase, tokens in
             tab?.subagentTracker.handleProgress(id: id, phase: phase, tokensUsed: tokens)
+            if let self, let subTab = self.tabForSubagent(id) {
+                self.feedToSurface(tab: subTab, text: phase)
+            }
         }
         client.onSubagentComplete = { [weak self, weak tab] id, tokens in
-            guard let tab else { return }
+            guard let self, let tab else { return }
             tab.subagentTracker.handleComplete(id: id, tokensUsed: tokens)
 
-            // Update pipeline group progress
-            if let self, let gid = tab.groupID, let group = self.tabGroups.first(where: { $0.id == gid }) {
+            if let subTab = self.tabForSubagent(id) {
+                self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;32m✓ Subagent complete\u{1b}[0m\r\n")
+            }
+
+            // Update pipeline group progress (group is on subagent tabs)
+            let subagentGroupId = self.tabForSubagent(id)?.groupID
+            if let gid = subagentGroupId, let group = self.tabGroups.first(where: { $0.id == gid }) {
                 group.completedStages = tab.subagentTracker.subagents.values.filter { !$0.isActive }.count
                 if group.autoCloseOnComplete && group.completedStages >= group.totalStages && group.totalStages > 0 {
                     self.closePipelineGroup(group)
@@ -2757,8 +2809,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.reloadTabBar()
             }
         }
-        client.onSubagentError = { [weak tab] id, message in
+        client.onSubagentError = { [weak self, weak tab] id, message in
             tab?.subagentTracker.handleError(id: id, message: message)
+            if let self, let subTab = self.tabForSubagent(id) {
+                self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;31m✗ Error: \(message)\u{1b}[0m\r\n")
+            }
         }
     }
 
