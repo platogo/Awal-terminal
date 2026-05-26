@@ -55,20 +55,6 @@ pub struct JsonRpcNotification {
 
 // --- ACP-specific types ---
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeParams {
-    pub protocol_version: u16,
-    pub client_capabilities: Value,
-    pub client_info: ClientInfo,
-}
-
-#[derive(Serialize)]
-pub struct ClientInfo {
-    pub name: String,
-    pub version: String,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResult {

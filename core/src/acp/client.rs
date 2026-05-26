@@ -255,7 +255,7 @@ impl AcpClient {
         let params = serde_json::json!({
             "protocolVersion": 1,
             "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
-            "clientInfo": { "name": "AwalTerminal", "version": "0.17.0" }
+            "clientInfo": { "name": "AwalTerminal", "version": env!("CARGO_PKG_VERSION") }
         });
         self.send_request("initialize", Some(params))
     }
