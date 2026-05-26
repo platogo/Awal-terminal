@@ -2902,6 +2902,48 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;31m✗ Error: \(message)\u{1b}[0m\r\n")
             }
         }
+        client.onMetadataUpdate = { [weak tab] pct, credits in
+            guard let tab else { return }
+            tab.aiSidePanel.updateContextBarDirect(percentage: pct)
+            if let credits {
+                tab.tokenTracker.addCredits(credits)
+                tab.aiSidePanel.updateTokenDisplay(
+                    input: tab.tokenTracker.currentInput,
+                    output: tab.tokenTracker.totalOutput
+                )
+            }
+        }
+        client.onSessionInfoUpdate = { [weak self, weak tab] title in
+            guard let self, let tab else { return }
+            tab.customTitle = title
+            self.reloadTabBar()
+        }
+        client.onCompactionStatus = { [weak self, weak tab] status in
+            guard let self, let tab else { return }
+            if status == "in_progress" {
+                self.feedToSurface(tab: tab, text: "\r\n\u{1b}[2;33m⟳ Context compacting…\u{1b}[0m\r\n")
+            } else if status == "completed" {
+                self.feedToSurface(tab: tab, text: "\r\n\u{1b}[2;32m✓ Context compacted\u{1b}[0m\r\n")
+            }
+        }
+        client.onSessionList = { [weak tab] json in
+            guard let tab else { return }
+            debugLog("ACP: session list received: \(json.prefix(200))")
+            // Parse and update resume UI
+            if let data = json.data(using: .utf8),
+               let wrapper = try? JSONDecoder().decode(SessionListWrapper.self, from: data) {
+                let sessions = wrapper.sessions.map { entry in
+                    SessionManager.SessionInfo(
+                        id: entry.sessionId, model: "Kiro",
+                        projectPath: tab.statusBar.currentPath ?? "",
+                        startedAt: entry.createdAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date(),
+                        lastActiveAt: Date(),
+                        inputTokens: 0, outputTokens: 0, turns: 0, jsonlPath: nil
+                    )
+                }
+                tab.aiSidePanel.updateSessionHistory(sessions: sessions)
+            }
+        }
     }
 
     private var diffReviewPopover: NSPopover?
@@ -3056,4 +3098,16 @@ private class ColorPanelHelper: NSObject {
     @objc func colorChanged(_ sender: NSColorPanel) {
         onChange(tabIndex, sender.color)
     }
+}
+
+// MARK: - ACP Session List Decoding
+
+private struct SessionListWrapper: Decodable {
+    let sessions: [SessionListEntry]
+}
+
+private struct SessionListEntry: Decodable {
+    let sessionId: String
+    let title: String?
+    let createdAt: String?
 }

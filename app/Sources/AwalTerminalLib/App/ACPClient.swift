@@ -35,6 +35,10 @@ class ACPClient {
     var onPlanUpdate: ((String) -> Void)?
     var onImageContent: ((String, String) -> Void)?
     var onUsageUpdate: ((UInt64, UInt64, Double?, String?) -> Void)?
+    var onMetadataUpdate: ((Double, Double?) -> Void)?
+    var onSessionInfoUpdate: ((String) -> Void)?
+    var onCompactionStatus: ((String) -> Void)?
+    var onSessionList: ((String) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
@@ -205,6 +209,16 @@ class ACPClient {
         return at_acp_send_rewind(handle) == 0
     }
 
+    func sendClose() {
+        guard let handle else { return }
+        _ = at_acp_send_close(handle)
+    }
+
+    func listSessions() -> Bool {
+        guard let handle else { return false }
+        return at_acp_send_list_sessions(handle) == 0
+    }
+
     func forceKill() {
         guard let handle else { return }
         at_acp_force_kill(handle)
@@ -238,6 +252,7 @@ class ACPClient {
     }
 
     func destroy() {
+        sendClose()
         stdoutSource?.cancel()
         stdoutSource = nil
         stderrSource?.cancel()
@@ -445,6 +460,19 @@ class ACPClient {
                     }
                     onUsageUpdate?(used, size, cost, currency)
                 }
+            case 23: // MetadataUpdate
+                if let meta = text {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    let pct = parts.count > 0 ? Double(parts[0]) ?? 0 : 0
+                    let credits: Double? = parts.count > 1 ? Double(parts[1]).flatMap { $0 < 0 ? nil : $0 } : nil
+                    onMetadataUpdate?(pct, credits)
+                }
+            case 24: // SessionInfoUpdate
+                if let text { onSessionInfoUpdate?(text) }
+            case 25: // CompactionStatus
+                if let text { onCompactionStatus?(text) }
+            case 26: // SessionList
+                if let text { onSessionList?(text) }
             default:
                 break
             }

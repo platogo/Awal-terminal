@@ -745,6 +745,40 @@ class AISidePanelView: NSView {
         contextBarFillWidth?.isActive = true
     }
 
+    /// Update context bar directly from a percentage (used by Kiro metadata notifications).
+    func updateContextBarDirect(percentage: Double) {
+        contextBarBackground.isHidden = true
+        contextSegmentedBar.isHidden = false
+        contextSparkline.isHidden = false
+        contextPercentLabel.isHidden = false
+
+        let fraction = min(percentage / 100.0, 1.0)
+        let percent = Int(fraction * 100)
+        contextPercentLabel.stringValue = "  Context: \(percent)%"
+
+        let barColor: NSColor
+        if fraction < 0.5 {
+            barColor = NSColor(red: 80.0/255.0, green: 200.0/255.0, blue: 120.0/255.0, alpha: 1.0)
+        } else if fraction < 0.8 {
+            barColor = NSColor(red: 240.0/255.0, green: 200.0/255.0, blue: 60.0/255.0, alpha: 1.0)
+        } else {
+            barColor = NSColor(red: 240.0/255.0, green: 100.0/255.0, blue: 70.0/255.0, alpha: 1.0)
+        }
+        contextPercentLabel.textColor = barColor
+
+        let isWarning = fraction >= 0.8
+        compactionWarningLabel.isHidden = !isWarning
+        compactionWarningHeight?.constant = isWarning ? compactionWarningLabel.intrinsicContentSize.height : 0
+        contextSegmentedBar.isWarning = isWarning
+
+        contextSegmentedBar.segments = [
+            .init(fraction: CGFloat(fraction), color: barColor, label: "Context"),
+        ]
+
+        tokenTracker.appendSparklinePoint(fraction)
+        contextSparkline.dataPoints = tokenTracker.sparklineHistory
+    }
+
     @objc private func contextBarClicked(_ sender: NSClickGestureRecognizer) {
         showContextPopover()
     }
