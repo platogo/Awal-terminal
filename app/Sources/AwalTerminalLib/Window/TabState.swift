@@ -21,6 +21,9 @@ class TabState {
     /// Set when the user manually closes the AI side panel; prevents auto-reopen.
     var userClosedAIPanel = false
 
+    /// Subagent ID when this tab represents a spawned subagent (nil for master tabs).
+    var subagentId: String?
+
     /// Per-tab ACP client for Kiro sessions.
     var acpClient: ACPClient?
 

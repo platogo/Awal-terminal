@@ -152,6 +152,10 @@ class ChatInputView: NSView, NSTextViewDelegate {
         alphaValue = enabled ? 1.0 : 0.5
     }
 
+    func setPlaceholder(_ text: String) {
+        placeholderLabel.stringValue = text
+    }
+
     func focus() {
         window?.makeFirstResponder(textView)
     }
