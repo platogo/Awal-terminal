@@ -2958,10 +2958,14 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         client.onAvailableCommands = { [weak tab] json in
             tab?.availableCommandsJson = json
         }
-        client.onMcpOAuthRequest = { url in
-            if let nsUrl = URL(string: url) {
-                NSWorkspace.shared.open(nsUrl)
+        client.onMcpOAuthRequest = { [weak self] url in
+            _ = self  // prevent unused warning
+            guard let nsUrl = URL(string: url),
+                  nsUrl.scheme == "https" || nsUrl.scheme == "http" else {
+                debugLog("ACP: ignoring MCP OAuth URL with non-HTTP scheme: \(url)")
+                return
             }
+            NSWorkspace.shared.open(nsUrl)
         }
         client.onTerminalCreate = { [weak self] requestId, _, command, args, env, cwd, byteLimit in
             guard let self else { return }
