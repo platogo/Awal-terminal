@@ -163,6 +163,8 @@ fn is_auth_error(code: i64, message: &str) -> bool {
 pub fn parse_line(
     line: &str,
     pending_methods: &std::sync::Mutex<std::collections::HashMap<u64, String>>,
+    incoming_id_map: &std::sync::Mutex<std::collections::HashMap<u64, serde_json::Value>>,
+    next_incoming_id: &std::sync::atomic::AtomicU64,
 ) -> Option<AcpEvent> {
     if line.is_empty() {
         return None;
@@ -175,15 +177,22 @@ pub fn parse_line(
             )));
         }
     };
-    parse_message(msg, pending_methods)
+    parse_message(msg, pending_methods, incoming_id_map, next_incoming_id)
 }
 
 fn parse_message(
     msg: RawMessage,
     pending_methods: &std::sync::Mutex<std::collections::HashMap<u64, String>>,
+    incoming_id_map: &std::sync::Mutex<std::collections::HashMap<u64, serde_json::Value>>,
+    next_incoming_id: &std::sync::atomic::AtomicU64,
 ) -> Option<AcpEvent> {
     // Server-to-client request: has both `id` and `method`
-    if let (Some(id), Some(method)) = (msg.id, msg.method.as_ref()) {
+    if let (Some(id_val), Some(method)) = (msg.id.clone(), msg.method.as_ref()) {
+        // Assign a sequential internal u64 and store the original Value for response routing
+        let id = next_incoming_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut map) = incoming_id_map.lock() {
+            map.insert(id, id_val);
+        }
         match method.as_str() {
             "session/request_permission" => {
                 let Some(params_val) = msg.params else {
@@ -372,8 +381,9 @@ fn parse_message(
         }
     }
 
-    if let Some(id) = msg.id {
-        // This is a response to one of our requests
+    if let Some(id_val) = msg.id {
+        // This is a response to one of our requests (always numeric IDs)
+        let id = id_val.as_u64()?;
         let method = match pending_methods.lock() {
             Ok(mut map) => map.remove(&id)?,
             Err(_) => {
@@ -619,18 +629,29 @@ fn parse_message(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex};
+
+    fn new_incoming_id_map() -> Arc<Mutex<HashMap<u64, serde_json::Value>>> {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    fn new_counter() -> Arc<AtomicU64> {
+        Arc::new(AtomicU64::new(1))
+    }
 
     #[test]
     fn parse_initialize_response() {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         pending.lock().unwrap().insert(1, "initialize".to_string());
+        let id_map = new_incoming_id_map();
+        let counter = new_counter();
 
         let msg: RawMessage = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-01-01"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &id_map, &counter).unwrap();
         assert!(matches!(event, AcpEvent::Initialized));
     }
 
@@ -642,7 +663,7 @@ mod tests {
         let msg: RawMessage =
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-123"}}"#)
                 .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SessionCreated(id) => assert_eq!(id, "sess-123"),
             _ => panic!("expected SessionCreated"),
@@ -656,7 +677,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::TextChunk(t) => assert_eq!(t, "Hello world"),
             _ => panic!("expected TextChunk"),
@@ -672,7 +693,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"bad request"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::Error(e) => assert!(e.contains("bad request")),
             _ => panic!("expected Error"),
@@ -686,7 +707,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":42,"method":"session/request_permission","params":{"sessionId":"s1","toolCallId":"tc1","toolName":"write","description":"Write to /tmp/foo","kind":"write"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::PermissionRequest {
                 request_id,
@@ -695,7 +716,7 @@ mod tests {
                 description,
                 kind,
             } => {
-                assert_eq!(request_id, 42);
+                assert_eq!(request_id, 1);
                 assert_eq!(tool_call_id, "tc1");
                 assert_eq!(tool_name, "write");
                 assert_eq!(description, "Write to /tmp/foo");
@@ -717,7 +738,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":3,"result":{"sessionId":"resumed-456"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SessionCreated(id) => assert_eq!(id, "resumed-456"),
             _ => panic!("expected SessionCreated from resume"),
@@ -734,7 +755,7 @@ mod tests {
 
         let msg: RawMessage =
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":4,"result":{}}"#).unwrap();
-        let event = parse_message(msg, &pending);
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter());
         assert!(event.is_none());
     }
 
@@ -747,7 +768,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"session expired"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::AuthRequired(msg) => assert!(msg.contains("session expired")),
             _ => panic!("expected AuthRequired"),
@@ -763,7 +784,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Unauthorized: please login"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         assert!(matches!(event, AcpEvent::AuthRequired(_)));
     }
 
@@ -774,10 +795,10 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":10,"method":"fs/read_text_file","params":{"path":"/tmp/test.txt"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::FsReadRequest { request_id, path } => {
-                assert_eq!(request_id, 10);
+                assert_eq!(request_id, 1);
                 assert_eq!(path, "/tmp/test.txt");
             }
             _ => panic!("expected FsReadRequest"),
@@ -791,14 +812,14 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":11,"method":"fs/write_text_file","params":{"path":"/tmp/out.txt","content":"hello"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::FsWriteRequest {
                 request_id,
                 path,
                 content,
             } => {
-                assert_eq!(request_id, 11);
+                assert_eq!(request_id, 1);
                 assert_eq!(path, "/tmp/out.txt");
                 assert_eq!(content, "hello");
             }
@@ -813,7 +834,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_spawned","subagentId":"sub-1","name":"researcher","role":"code-review","parentSessionId":"s1","dependsOn":["sub-0"]}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SubagentSpawned {
                 subagent_id,
@@ -839,7 +860,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_progress","subagentId":"sub-1","phase":"Analyzing files","tokensUsed":1500}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SubagentProgress {
                 subagent_id,
@@ -861,7 +882,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_complete","subagentId":"sub-1","tokensUsed":3200}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SubagentComplete {
                 subagent_id,
@@ -881,7 +902,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_error","subagentId":"sub-1","message":"timeout exceeded"}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SubagentError {
                 subagent_id,
@@ -901,7 +922,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::AgentThought(t) => assert_eq!(t, "thinking..."),
             _ => panic!("expected AgentThought"),
@@ -915,7 +936,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"plan","entries":[{"content":"Step 1","priority":"high","status":"in_progress"}]}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::PlanUpdate { entries_json } => {
                 assert!(entries_json.contains("Step 1"));
@@ -932,7 +953,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"some_future_thing","data":"whatever"}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending);
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter());
         assert!(event.is_none());
     }
 
@@ -943,7 +964,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":5000,"size":200000,"cost":{"amount":0.05,"currency":"USD"}}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::UsageUpdate {
                 used_tokens,
@@ -967,7 +988,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"image","data":"base64data","mimeType":"image/png"}}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::ImageContent { data, mime_type } => {
                 assert_eq!(data, "base64data");
@@ -988,7 +1009,7 @@ mod tests {
         let msg: RawMessage =
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":5,"result":{"stopReason":"cancelled"}}"#)
                 .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         assert!(matches!(event, AcpEvent::Cancelled));
     }
 
@@ -996,8 +1017,10 @@ mod tests {
 
     /// Helper: parse a JSON line through the full pipeline.
     fn parse_line(json: &str, pending: &Arc<Mutex<HashMap<u64, String>>>) -> Option<AcpEvent> {
+        let id_map = new_incoming_id_map();
+        let counter = new_counter();
         let msg: RawMessage = serde_json::from_str(json).ok()?;
-        parse_message(msg, pending)
+        parse_message(msg, pending, &id_map, &counter)
     }
 
     #[test]
@@ -1268,7 +1291,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"_kiro.dev/metadata","params":{"contextUsagePercentage":42.5,"meteringUsage":[{"value":1.25}]}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::MetadataUpdate {
                 context_percentage,
@@ -1288,7 +1311,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"_kiro.dev/metadata","params":{"contextUsagePercentage":80.0}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::MetadataUpdate {
                 context_percentage,
@@ -1308,7 +1331,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"session_info_update","title":"Implement auth flow"}}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SessionInfoUpdate(title) => assert_eq!(title, "Implement auth flow"),
             _ => panic!("expected SessionInfoUpdate"),
@@ -1322,7 +1345,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"_kiro.dev/compaction/status","params":{"status":"in_progress"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::CompactionStatus(status) => assert_eq!(status, "in_progress"),
             _ => panic!("expected CompactionStatus"),
@@ -1341,7 +1364,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":5,"result":{"sessions":[{"sessionId":"s1","title":"Fix bug","createdAt":"2025-01-01T00:00:00Z"}]}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::SessionList(json) => {
                 assert!(json.contains("s1"));
@@ -1358,7 +1381,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":50,"method":"terminal/create","params":{"sessionId":"s1","command":"bash","args":["-c","echo hi"],"env":{"FOO":"bar"},"cwd":"/tmp","outputByteLimit":1024}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::TerminalCreate {
                 request_id,
@@ -1369,7 +1392,7 @@ mod tests {
                 cwd,
                 output_byte_limit,
             } => {
-                assert_eq!(request_id, 50);
+                assert_eq!(request_id, 1);
                 assert_eq!(session_id, "s1");
                 assert_eq!(command, "bash");
                 assert_eq!(args, vec!["-c", "echo hi"]);
@@ -1388,7 +1411,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":51,"method":"terminal/create","params":{"sessionId":"s1"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         assert!(matches!(event, AcpEvent::ProtocolLog(_)));
     }
 
@@ -1399,13 +1422,13 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":52,"method":"terminal/output","params":{"terminalId":"t-123"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::TerminalOutput {
                 request_id,
                 terminal_id,
             } => {
-                assert_eq!(request_id, 52);
+                assert_eq!(request_id, 1);
                 assert_eq!(terminal_id, "t-123");
             }
             _ => panic!("expected TerminalOutput"),
@@ -1419,13 +1442,13 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":53,"method":"terminal/wait_for_exit","params":{"terminalId":"t-123"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::TerminalWaitForExit {
                 request_id,
                 terminal_id,
             } => {
-                assert_eq!(request_id, 53);
+                assert_eq!(request_id, 1);
                 assert_eq!(terminal_id, "t-123");
             }
             _ => panic!("expected TerminalWaitForExit"),
@@ -1439,13 +1462,13 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":54,"method":"terminal/kill","params":{"terminalId":"t-123"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::TerminalKill {
                 request_id,
                 terminal_id,
             } => {
-                assert_eq!(request_id, 54);
+                assert_eq!(request_id, 1);
                 assert_eq!(terminal_id, "t-123");
             }
             _ => panic!("expected TerminalKill"),
@@ -1459,13 +1482,13 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":55,"method":"terminal/release","params":{"terminalId":"t-123"}}"#,
         )
         .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         match event {
             AcpEvent::TerminalRelease {
                 request_id,
                 terminal_id,
             } => {
-                assert_eq!(request_id, 55);
+                assert_eq!(request_id, 1);
                 assert_eq!(terminal_id, "t-123");
             }
             _ => panic!("expected TerminalRelease"),
@@ -1478,7 +1501,34 @@ mod tests {
         let msg: RawMessage =
             serde_json::from_str(r#"{"jsonrpc":"2.0","id":56,"method":"terminal/output"}"#)
                 .unwrap();
-        let event = parse_message(msg, &pending).unwrap();
+        let event = parse_message(msg, &pending, &new_incoming_id_map(), &new_counter()).unwrap();
         assert!(matches!(event, AcpEvent::ProtocolLog(_)));
+    }
+
+    #[test]
+    fn parse_permission_request_with_string_uuid_id() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let id_map = new_incoming_id_map();
+        let counter = new_counter();
+        let msg: RawMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"01f87e86-8251-4fdb-b54b-f2864ae8ca01","method":"session/request_permission","params":{"sessionId":"s1","toolCallId":"tc1","toolName":"write","description":"Write to /tmp/foo","kind":"write"}}"#,
+        )
+        .unwrap();
+        let event = parse_message(msg, &pending, &id_map, &counter).unwrap();
+        match event {
+            AcpEvent::PermissionRequest {
+                request_id,
+                tool_name,
+                ..
+            } => {
+                assert_eq!(request_id, 1);
+                assert_eq!(tool_name, "write");
+                // Verify the original UUID is stored in the map
+                let map = id_map.lock().unwrap();
+                let original = map.get(&1).unwrap();
+                assert_eq!(original, "01f87e86-8251-4fdb-b54b-f2864ae8ca01");
+            }
+            _ => panic!("expected PermissionRequest"),
+        }
     }
 }

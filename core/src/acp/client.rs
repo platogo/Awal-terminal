@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +25,8 @@ pub struct AcpClient {
     stdin: std::io::BufWriter<Box<dyn Write + Send>>,
     rx: mpsc::Receiver<AcpEvent>,
     pending_methods: Arc<Mutex<HashMap<u64, String>>>,
+    incoming_id_map: Arc<Mutex<HashMap<u64, serde_json::Value>>>,
+    next_incoming_id: Arc<AtomicU64>,
     tx: mpsc::Sender<AcpEvent>,
     next_id: u64,
     session_id: Option<String>,
@@ -42,11 +45,15 @@ impl AcpClient {
         let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
         let (tx, rx) = mpsc::channel();
         let pending_methods = Arc::new(Mutex::new(HashMap::new()));
+        let incoming_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let next_incoming_id = Arc::new(AtomicU64::new(1));
 
         let mut client = Self {
             stdin: std::io::BufWriter::new(Box::new(stdin_file)),
             rx,
             pending_methods,
+            incoming_id_map,
+            next_incoming_id,
             tx,
             next_id: 0,
             session_id: None,
@@ -64,7 +71,12 @@ impl AcpClient {
     /// Feed a line from stdout (called by Swift when it reads a line).
     pub fn feed_stdout_line(&mut self, line: &str) {
         use crate::acp::reader::parse_line;
-        if let Some(event) = parse_line(line, &self.pending_methods) {
+        if let Some(event) = parse_line(
+            line,
+            &self.pending_methods,
+            &self.incoming_id_map,
+            &self.next_incoming_id,
+        ) {
             self.handle_state_transition(&event);
             // If session/new returned config_options, move from sentinel to dedicated field
             if matches!(event, AcpEvent::SessionCreated(_)) {
@@ -232,9 +244,10 @@ impl AcpClient {
         request_id: u64,
         approved: bool,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = JsonRpcResponseOut {
             jsonrpc: "2.0",
-            id: request_id,
+            id,
             result: Some(serde_json::json!({ "approved": approved })),
             error: None,
         };
@@ -247,16 +260,17 @@ impl AcpClient {
         request_id: u64,
         content: Result<String, String>,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = match content {
             Ok(text) => JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: Some(serde_json::json!({ "content": text })),
                 error: None,
             },
             Err(msg) => JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: None,
                 error: Some(crate::acp::protocol::JsonRpcErrorOut {
                     code: -32000,
@@ -274,17 +288,18 @@ impl AcpClient {
         success: bool,
         error: Option<String>,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = if success {
             JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: Some(serde_json::json!({ "success": true })),
                 error: None,
             }
         } else {
             JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: None,
                 error: Some(crate::acp::protocol::JsonRpcErrorOut {
                     code: -32000,
@@ -299,9 +314,10 @@ impl AcpClient {
     pub fn respond_json(&mut self, request_id: u64, result_json: &str) -> Result<(), String> {
         let result: serde_json::Value =
             serde_json::from_str(result_json).map_err(|e| e.to_string())?;
+        let id = self.resolve_original_id(request_id);
         let resp = JsonRpcResponseOut {
             jsonrpc: "2.0",
-            id: request_id,
+            id,
             result: Some(result),
             error: None,
         };
@@ -315,9 +331,10 @@ impl AcpClient {
         code: i64,
         message: &str,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = JsonRpcResponseOut {
             jsonrpc: "2.0",
-            id: request_id,
+            id,
             result: None,
             error: Some(crate::acp::protocol::JsonRpcErrorOut {
                 code,
@@ -328,6 +345,15 @@ impl AcpClient {
     }
 
     // --- Private ---
+
+    /// Resolve an internal u64 request ID back to the original JSON-RPC ID value.
+    fn resolve_original_id(&self, request_id: u64) -> serde_json::Value {
+        self.incoming_id_map
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(&request_id))
+            .unwrap_or_else(|| serde_json::Value::Number(request_id.into()))
+    }
 
     fn write_response(&mut self, resp: &JsonRpcResponseOut) -> Result<(), String> {
         let line = serde_json::to_string(resp).map_err(|e| e.to_string())?;
