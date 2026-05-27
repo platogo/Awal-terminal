@@ -2939,11 +2939,13 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             do {
                 let wrapper = try JSONDecoder().decode(SessionListWrapper.self, from: data)
                 let sessions = wrapper.sessions.map { entry in
-                    SessionManager.SessionInfo(
+                    let dateStr = entry.updatedAt ?? entry.createdAt
+                    let date = dateStr.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    return SessionManager.SessionInfo(
                         id: entry.sessionId, model: "Kiro",
                         projectPath: tab.statusBar.currentPath ?? "",
-                        startedAt: entry.createdAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date(),
-                        lastActiveAt: Date(),
+                        startedAt: entry.createdAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? date,
+                        lastActiveAt: date,
                         inputTokens: 0, outputTokens: 0, turns: 0, jsonlPath: nil
                     )
                 }
@@ -2967,17 +2969,17 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             }
             NSWorkspace.shared.open(nsUrl)
         }
-        client.onTerminalCreate = { [weak self] requestId, _, command, args, env, cwd, byteLimit in
-            guard let self else { return }
+        client.onTerminalCreate = { [weak self, weak tab] requestId, _, command, args, env, cwd, byteLimit in
+            guard let self, let tab else { return }
             if let terminalId = self.acpTerminalManager.create(command: command, args: args, env: env, cwd: cwd, outputByteLimit: byteLimit) {
-                self.activeTab.acpClient?.respondJson(requestId: requestId, json: "{\"terminalId\":\"\(terminalId)\"}")
+                tab.acpClient?.respondJson(requestId: requestId, json: "{\"terminalId\":\"\(terminalId)\"}")
             } else {
-                self.activeTab.acpClient?.respondError(requestId: requestId, code: -32000, message: "Failed to create terminal")
+                tab.acpClient?.respondError(requestId: requestId, code: -32000, message: "Failed to create terminal")
             }
         }
-        client.onTerminalOutput = { [weak self] requestId, terminalId in
-            guard let self, let result = self.acpTerminalManager.getOutput(terminalId: terminalId) else {
-                self?.activeTab.acpClient?.respondError(requestId: requestId, code: -32000, message: "Terminal not found")
+        client.onTerminalOutput = { [weak self, weak tab] requestId, terminalId in
+            guard let self, let tab, let result = self.acpTerminalManager.getOutput(terminalId: terminalId) else {
+                tab?.acpClient?.respondError(requestId: requestId, code: -32000, message: "Terminal not found")
                 return
             }
             var json = "{\"output\":\(Self.jsonEscape(result.output)),\"truncated\":\(result.truncated)"
@@ -2987,11 +2989,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 json += ",\"exitStatus\":{\"signal\":\(signal)}"
             }
             json += "}"
-            self.activeTab.acpClient?.respondJson(requestId: requestId, json: json)
+            tab.acpClient?.respondJson(requestId: requestId, json: json)
         }
-        client.onTerminalWaitForExit = { [weak self] requestId, terminalId in
+        client.onTerminalWaitForExit = { [weak self, weak tab] requestId, terminalId in
             guard let self else { return }
-            self.acpTerminalManager.waitForExit(terminalId: terminalId) { [weak self] exitCode, signal in
+            self.acpTerminalManager.waitForExit(terminalId: terminalId) { [weak tab] exitCode, signal in
                 var json = "{"
                 if let exitCode {
                     json += "\"exitCode\":\(exitCode)"
@@ -3004,28 +3006,29 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                     json += ",\"signal\":null"
                 }
                 json += "}"
-                self?.activeTab.acpClient?.respondJson(requestId: requestId, json: json)
+                tab?.acpClient?.respondJson(requestId: requestId, json: json)
             }
         }
-        client.onTerminalKill = { [weak self] requestId, terminalId in
+        client.onTerminalKill = { [weak self, weak tab] requestId, terminalId in
             guard let self else { return }
             _ = self.acpTerminalManager.kill(terminalId: terminalId)
-            self.activeTab.acpClient?.respondJson(requestId: requestId, json: "{}")
+            tab?.acpClient?.respondJson(requestId: requestId, json: "{}")
         }
-        client.onTerminalRelease = { [weak self] requestId, terminalId in
+        client.onTerminalRelease = { [weak self, weak tab] requestId, terminalId in
             guard let self else { return }
             _ = self.acpTerminalManager.release(terminalId: terminalId)
-            self.activeTab.acpClient?.respondJson(requestId: requestId, json: "{}")
+            tab?.acpClient?.respondJson(requestId: requestId, json: "{}")
         }
     }
 
     private var diffReviewPopover: NSPopover?
 
     private static func jsonEscape(_ string: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: string) else {
+        guard let data = try? JSONEncoder().encode(string),
+              let json = String(data: data, encoding: .utf8) else {
             return "\"\""
         }
-        return String(data: data, encoding: .utf8) ?? "\"\""
+        return json
     }
 
     private func showDiffReview(requestId: UInt64, path: String, content: String, cwd: String) {
@@ -3190,4 +3193,5 @@ private struct SessionListEntry: Decodable {
     let sessionId: String
     let title: String?
     let createdAt: String?
+    let updatedAt: String?
 }

@@ -28,8 +28,13 @@ class ACPTerminalManager {
     func create(command: String, args: [String], env: [(String, String)], cwd: String?, outputByteLimit: Int) -> String? {
         let id = UUID().uuidString
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
+        if command.contains("/") {
+            process.executableURL = URL(fileURLWithPath: command)
+            process.arguments = args
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [command] + args
+        }
 
         var environment = ProcessInfo.processInfo.environment
         for (key, value) in env {
