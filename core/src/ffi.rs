@@ -947,8 +947,12 @@ pub struct ATAcpClient(AcpClient);
 ///             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
 ///             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
 ///             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
-///             17=Stderr, 18=ProtocolLog, 27=TerminalCreate, 28=TerminalOutput,
-///             29=TerminalWaitForExit, 30=TerminalKill, 31=TerminalRelease
+///             17=Stderr, 18=ProtocolLog, 19=AgentThought, 20=PlanUpdate,
+///             21=ImageContent, 22=UsageUpdate, 23=MetadataUpdate,
+///             24=SessionInfoUpdate, 25=CompactionStatus, 26=SessionList,
+///             27=TerminalCreate, 28=TerminalOutput, 29=TerminalWaitForExit,
+///             30=TerminalKill, 31=TerminalRelease, 32=ConfigOptionsReceived,
+///             33=AvailableCommands, 34=McpOAuthRequest
 #[repr(C)]
 pub struct ATAcpEvent {
     pub event_type: u8,

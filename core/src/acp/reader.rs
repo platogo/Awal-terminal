@@ -270,13 +270,26 @@ fn parse_message(
                             .collect()
                     })
                     .unwrap_or_default();
-                let env = params
+                let env: Vec<(String, String)> = params
                     .get("env")
-                    .and_then(|v| v.as_object())
-                    .map(|obj| {
-                        obj.iter()
-                            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-                            .collect()
+                    .and_then(|v| {
+                        if let Some(arr) = v.as_array() {
+                            Some(
+                                arr.iter()
+                                    .filter_map(|entry| {
+                                        let name = entry.get("name")?.as_str()?;
+                                        let value = entry.get("value")?.as_str().unwrap_or("");
+                                        Some((name.to_string(), value.to_string()))
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            v.as_object().map(|obj| {
+                                obj.iter()
+                                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                                    .collect()
+                            })
+                        }
                     })
                     .unwrap_or_default();
                 let cwd = params.get("cwd").and_then(|v| v.as_str()).map(String::from);

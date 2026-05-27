@@ -32,6 +32,7 @@ pub struct AcpClient {
     resume_session_id: Option<String>,
     crash_count: u8,
     max_retries: u8,
+    pub pending_config_options: Option<String>,
 }
 
 impl AcpClient {
@@ -54,6 +55,7 @@ impl AcpClient {
             resume_session_id: None,
             crash_count: 0,
             max_retries: 3,
+            pending_config_options: None,
         };
         client.send_initialize()?;
         Ok(client)
@@ -64,10 +66,11 @@ impl AcpClient {
         use crate::acp::reader::parse_line;
         if let Some(event) = parse_line(line, &self.pending_methods) {
             self.handle_state_transition(&event);
-            // If session/new returned config_options, emit them after SessionCreated
+            // If session/new returned config_options, move from sentinel to dedicated field
             if matches!(event, AcpEvent::SessionCreated(_)) {
                 if let Ok(mut map) = self.pending_methods.lock() {
                     if let Some(json) = map.remove(&u64::MAX) {
+                        self.pending_config_options = Some(json.clone());
                         let _ = self.tx.send(AcpEvent::ConfigOptionsReceived(json));
                     }
                 }
