@@ -36,11 +36,20 @@ class TabState {
     /// Project path for ACP sessions (used for tab title since PTY CWD is unavailable).
     var acpProjectPath: String?
 
+    /// Number of ACP reconnection attempts since last successful session.
+    var acpReconnectCount: Int = 0
+
     /// Per-tab tracker for files modified by the AI agent.
     let agentChanges = AgentChangesTracker()
 
     /// Selected agent name for this tab's ACP session.
     var agentName: String?
+
+    /// Latest config options JSON from ACP.
+    var configOptionsJson: String?
+
+    /// Latest available commands JSON from ACP.
+    var availableCommandsJson: String?
 
     /// Stored constraint for animating side panel width.
     var sidePanelWidthConstraint: NSLayoutConstraint?

@@ -35,6 +35,18 @@ class ACPClient {
     var onPlanUpdate: ((String) -> Void)?
     var onImageContent: ((String, String) -> Void)?
     var onUsageUpdate: ((UInt64, UInt64, Double?, String?) -> Void)?
+    var onMetadataUpdate: ((Double, Double?) -> Void)?
+    var onSessionInfoUpdate: ((String) -> Void)?
+    var onCompactionStatus: ((String) -> Void)?
+    var onSessionList: ((String) -> Void)?
+    var onTerminalCreate: ((UInt64, String, String, [String], [(String, String)], String?, Int) -> Void)?
+    var onTerminalOutput: ((UInt64, String) -> Void)?
+    var onTerminalWaitForExit: ((UInt64, String) -> Void)?
+    var onTerminalKill: ((UInt64, String) -> Void)?
+    var onTerminalRelease: ((UInt64, String) -> Void)?
+    var onConfigOptions: ((String) -> Void)?
+    var onAvailableCommands: ((String) -> Void)?
+    var onMcpOAuthRequest: ((String) -> Void)?
 
     private(set) var sessionId: String?
     private(set) var isPrompting: Bool = false
@@ -205,6 +217,32 @@ class ACPClient {
         return at_acp_send_rewind(handle) == 0
     }
 
+    func sendClose() {
+        guard let handle else { return }
+        _ = at_acp_send_close(handle)
+    }
+
+    func listSessions() -> Bool {
+        guard let handle else { return false }
+        return at_acp_send_list_sessions(handle) == 0
+    }
+
+    func setConfigOption(configId: String, value: String) -> Bool {
+        guard let handle else { return false }
+        return configId.withCString { idPtr in
+            value.withCString { valPtr in
+                at_acp_set_config_option(handle, idPtr, valPtr) == 0
+            }
+        }
+    }
+
+    func terminateSession(sessionId: String) -> Bool {
+        guard let handle else { return false }
+        return sessionId.withCString { ptr in
+            at_acp_terminate_session(handle, ptr) == 0
+        }
+    }
+
     func forceKill() {
         guard let handle else { return }
         at_acp_force_kill(handle)
@@ -237,7 +275,22 @@ class ACPClient {
         _ = at_acp_respond_fs_write(handle, requestId, success)
     }
 
+    func respondJson(requestId: UInt64, json: String) {
+        guard let handle else { return }
+        json.withCString { ptr in
+            _ = at_acp_respond_json(handle, requestId, ptr)
+        }
+    }
+
+    func respondError(requestId: UInt64, code: Int64, message: String) {
+        guard let handle else { return }
+        message.withCString { ptr in
+            _ = at_acp_respond_error(handle, requestId, code, ptr)
+        }
+    }
+
     func destroy() {
+        sendClose()
         stdoutSource?.cancel()
         stdoutSource = nil
         stderrSource?.cancel()
@@ -357,7 +410,7 @@ class ACPClient {
                     requestId: requestId, toolCallId: toolCallId,
                     toolName: toolName, description: desc, kind: kind
                 )
-                handlePermissionRequest(request)
+                onPermissionRequest?(request)
             case 9: // Cancelled
                 isPrompting = false
                 onCancelled?()
@@ -445,28 +498,81 @@ class ACPClient {
                     }
                     onUsageUpdate?(used, size, cost, currency)
                 }
+            case 23: // MetadataUpdate
+                if let meta = text {
+                    let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                    let pct = parts.count > 0 ? Double(parts[0]) ?? 0 : 0
+                    let credits: Double? = parts.count > 1 ? Double(parts[1]).flatMap { $0 < 0 ? nil : $0 } : nil
+                    onMetadataUpdate?(pct, credits)
+                }
+            case 24: // SessionInfoUpdate
+                if let text { onSessionInfoUpdate?(text) }
+            case 25: // CompactionStatus
+                if let text { onCompactionStatus?(text) }
+            case 26: // SessionList
+                if let text { onSessionList?(text) }
+            case 27: // TerminalCreate
+                guard let paramsJson = text, let meta = text2 else {
+                    debugLog("ACP poll: TerminalCreate event missing text/text2")
+                    break
+                }
+                let parts = meta.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                guard parts.count > 0, let requestId = UInt64(parts[0]) else {
+                    debugLog("ACP poll: TerminalCreate failed to parse requestId")
+                    break
+                }
+                let sessionId = parts.count > 1 ? String(parts[1]) : ""
+                // Parse JSON params
+                guard let data = paramsJson.data(using: .utf8),
+                      let params = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let command = params["command"] as? String else {
+                    debugLog("ACP poll: TerminalCreate failed to parse params JSON")
+                    break
+                }
+                let args = params["args"] as? [String] ?? []
+                let envObj = params["env"] as? [[Any]] ?? []
+                let env: [(String, String)] = envObj.compactMap { pair in
+                    guard pair.count == 2, let k = pair[0] as? String, let v = pair[1] as? String else { return nil }
+                    return (k, v)
+                }
+                let cwd = params["cwd"] as? String
+                let byteLimit = params["outputByteLimit"] as? Int ?? 0
+                onTerminalCreate?(requestId, sessionId, command, args, env, cwd, byteLimit)
+            case 28: // TerminalOutput
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalOutput event missing text/text2")
+                    break
+                }
+                onTerminalOutput?(requestId, terminalId)
+            case 29: // TerminalWaitForExit
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalWaitForExit event missing text/text2")
+                    break
+                }
+                onTerminalWaitForExit?(requestId, terminalId)
+            case 30: // TerminalKill
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalKill event missing text/text2")
+                    break
+                }
+                onTerminalKill?(requestId, terminalId)
+            case 31: // TerminalRelease
+                guard let terminalId = text, let meta = text2, let requestId = UInt64(meta) else {
+                    debugLog("ACP poll: TerminalRelease event missing text/text2")
+                    break
+                }
+                onTerminalRelease?(requestId, terminalId)
+            case 32: // ConfigOptionsReceived
+                if let text { onConfigOptions?(text) }
+            case 33: // AvailableCommands
+                if let text { onAvailableCommands?(text) }
+            case 34: // McpOAuthRequest
+                if let text { onMcpOAuthRequest?(text) }
             default:
                 break
             }
             // Guard against use-after-free: callbacks above may destroy this client
             guard self.handle != nil else { return }
-        }
-    }
-
-    private func handlePermissionRequest(_ request: PermissionRequest) {
-        let trust = AppConfig.shared.kiroTrustLevel
-        switch trust {
-        case .all:
-            respondPermission(requestId: request.requestId, approved: true)
-        case .safe:
-            let safeKinds: Set<ToolCallKind> = [.read, .glob, .grep, .code]
-            if safeKinds.contains(request.kind) {
-                respondPermission(requestId: request.requestId, approved: true)
-            } else {
-                onPermissionRequest?(request)
-            }
-        case .none:
-            onPermissionRequest?(request)
         }
     }
 

@@ -79,7 +79,12 @@ typedef struct CRegionSummary {
  *             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
  *             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
  *             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
- *             17=Stderr, 18=ProtocolLog
+ *             17=Stderr, 18=ProtocolLog, 19=AgentThought, 20=PlanUpdate,
+ *             21=ImageContent, 22=UsageUpdate, 23=MetadataUpdate,
+ *             24=SessionInfoUpdate, 25=CompactionStatus, 26=SessionList,
+ *             27=TerminalCreate, 28=TerminalOutput, 29=TerminalWaitForExit,
+ *             30=TerminalKill, 31=TerminalRelease, 32=ConfigOptionsReceived,
+ *             33=AvailableCommands, 34=McpOAuthRequest
  */
 typedef struct ATAcpEvent {
     uint8_t event_type;
@@ -492,6 +497,29 @@ int32_t at_acp_cancel_subagent(struct ATAcpClient *client,
 int32_t at_acp_send_rewind(struct ATAcpClient *client);
 
 /**
+ * Send session/close notification. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_send_close(struct ATAcpClient *client);
+
+/**
+ * Send session/set_config_option. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_set_config_option(struct ATAcpClient *client,
+                                 const char *config_id,
+                                 const char *value);
+
+/**
+ * Send _session/terminate notification. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_terminate_session(struct ATAcpClient *client,
+                                 const char *session_id);
+
+/**
+ * Request session list. Returns 0 on success, -1 on error.
+ */
+int32_t at_acp_send_list_sessions(struct ATAcpClient *client);
+
+/**
  * Respond to a permission request. Returns 0 on success, -1 on error.
  */
 int32_t at_acp_respond_permission(struct ATAcpClient *client,
@@ -511,6 +539,21 @@ int32_t at_acp_respond_fs_read(struct ATAcpClient *client,
 int32_t at_acp_respond_fs_write(struct ATAcpClient *client,
                                 uint64_t request_id,
                                 bool success);
+
+/**
+ * Send an arbitrary JSON result for a server-to-client request.
+ */
+int32_t at_acp_respond_json(struct ATAcpClient *client,
+                            uint64_t request_id,
+                            const char *json);
+
+/**
+ * Send a JSON-RPC error response for a server-to-client request.
+ */
+int32_t at_acp_respond_error(struct ATAcpClient *client,
+                             uint64_t request_id,
+                             int64_t code,
+                             const char *message);
 
 /**
  * Get the current ACP state. Returns: 0=Initializing, 1=Ready, 2=Prompting, 3=Dead, 4=Recovering.

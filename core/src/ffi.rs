@@ -947,7 +947,12 @@ pub struct ATAcpClient(AcpClient);
 ///             8=PermissionRequest, 9=Cancelled, 10=AuthRequired,
 ///             11=FsReadRequest, 12=FsWriteRequest, 13=SubagentSpawned,
 ///             14=SubagentProgress, 15=SubagentComplete, 16=SubagentError,
-///             17=Stderr, 18=ProtocolLog
+///             17=Stderr, 18=ProtocolLog, 19=AgentThought, 20=PlanUpdate,
+///             21=ImageContent, 22=UsageUpdate, 23=MetadataUpdate,
+///             24=SessionInfoUpdate, 25=CompactionStatus, 26=SessionList,
+///             27=TerminalCreate, 28=TerminalOutput, 29=TerminalWaitForExit,
+///             30=TerminalKill, 31=TerminalRelease, 32=ConfigOptionsReceived,
+///             33=AvailableCommands, 34=McpOAuthRequest
 #[repr(C)]
 pub struct ATAcpEvent {
     pub event_type: u8,
@@ -1102,6 +1107,83 @@ pub extern "C" fn at_acp_poll_event(client: *mut ATAcpClient) -> *mut ATAcpEvent
                         currency.as_deref().unwrap_or("")
                     )),
                 ),
+                AcpEvent::MetadataUpdate {
+                    context_percentage,
+                    credits_used,
+                } => (
+                    23,
+                    string_to_c(&format!(
+                        "{context_percentage}\t{}",
+                        credits_used.unwrap_or(-1.0)
+                    )),
+                    std::ptr::null_mut(),
+                ),
+                AcpEvent::SessionInfoUpdate(title) => {
+                    (24, string_to_c(title), std::ptr::null_mut())
+                }
+                AcpEvent::CompactionStatus(status) => {
+                    (25, string_to_c(status), std::ptr::null_mut())
+                }
+                AcpEvent::SessionList(json) => (26, string_to_c(json), std::ptr::null_mut()),
+                AcpEvent::TerminalCreate {
+                    request_id,
+                    session_id,
+                    command,
+                    args,
+                    env,
+                    cwd,
+                    output_byte_limit,
+                } => {
+                    let params_json = serde_json::json!({
+                        "command": command,
+                        "args": args,
+                        "env": env,
+                        "cwd": cwd,
+                        "outputByteLimit": output_byte_limit,
+                    });
+                    (
+                        27,
+                        string_to_c(&params_json.to_string()),
+                        string_to_c(&format!("{request_id}\t{session_id}")),
+                    )
+                }
+                AcpEvent::TerminalOutput {
+                    request_id,
+                    terminal_id,
+                } => (
+                    28,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::TerminalWaitForExit {
+                    request_id,
+                    terminal_id,
+                } => (
+                    29,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::TerminalKill {
+                    request_id,
+                    terminal_id,
+                } => (
+                    30,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::TerminalRelease {
+                    request_id,
+                    terminal_id,
+                } => (
+                    31,
+                    string_to_c(terminal_id),
+                    string_to_c(&request_id.to_string()),
+                ),
+                AcpEvent::ConfigOptionsReceived(json) => {
+                    (32, string_to_c(json), std::ptr::null_mut())
+                }
+                AcpEvent::AvailableCommands(json) => (33, string_to_c(json), std::ptr::null_mut()),
+                AcpEvent::McpOAuthRequest(url) => (34, string_to_c(url), std::ptr::null_mut()),
             };
             Box::into_raw(Box::new(ATAcpEvent {
                 event_type,
@@ -1167,6 +1249,62 @@ pub extern "C" fn at_acp_send_rewind(client: *mut ATAcpClient) -> i32 {
     }
 }
 
+/// Send session/close notification. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_send_close(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.send_close() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Send session/set_config_option. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_set_config_option(
+    client: *mut ATAcpClient,
+    config_id: *const c_char,
+    value: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if config_id.is_null() || value.is_null() {
+        return -1;
+    }
+    let id_str = unsafe { std::ffi::CStr::from_ptr(config_id).to_str().unwrap_or("") };
+    let val_str = unsafe { std::ffi::CStr::from_ptr(value).to_str().unwrap_or("") };
+    match client.0.send_set_config_option(id_str, val_str) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Send _session/terminate notification. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_terminate_session(
+    client: *mut ATAcpClient,
+    session_id: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if session_id.is_null() {
+        return -1;
+    }
+    let sid = unsafe { std::ffi::CStr::from_ptr(session_id).to_str().unwrap_or("") };
+    match client.0.send_terminate_session(sid) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Request session list. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn at_acp_send_list_sessions(client: *mut ATAcpClient) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    match client.0.send_list_sessions() {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
 /// Respond to a permission request. Returns 0 on success, -1 on error.
 #[no_mangle]
 pub extern "C" fn at_acp_respond_permission(
@@ -1212,6 +1350,49 @@ pub extern "C" fn at_acp_respond_fs_write(
     match client.0.respond_fs_write(request_id, success, None) {
         Ok(()) => 0,
         Err(_) => -1,
+    }
+}
+
+/// Send an arbitrary JSON result for a server-to-client request.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_json(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    json: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if json.is_null() {
+        return -1;
+    }
+    let json_str = unsafe { std::ffi::CStr::from_ptr(json).to_str().unwrap_or("") };
+    match client.0.respond_json(request_id, json_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("at_acp_respond_json failed: {e}");
+            -1
+        }
+    }
+}
+
+/// Send a JSON-RPC error response for a server-to-client request.
+#[no_mangle]
+pub extern "C" fn at_acp_respond_error(
+    client: *mut ATAcpClient,
+    request_id: u64,
+    code: i64,
+    message: *const c_char,
+) -> i32 {
+    let client = mut_ref_or!(client, -1);
+    if message.is_null() {
+        return -1;
+    }
+    let msg_str = unsafe { std::ffi::CStr::from_ptr(message).to_str().unwrap_or("") };
+    match client.0.respond_error(request_id, code, msg_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("at_acp_respond_error failed: {e}");
+            -1
+        }
     }
 }
 

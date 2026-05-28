@@ -51,6 +51,16 @@ class TokenTracker {
         lock.unlock()
     }
 
+    /// Append a direct context fraction to the sparkline history.
+    func appendSparklinePoint(_ fraction: Double) {
+        lock.lock()
+        sparklineHistory.append(fraction)
+        if sparklineHistory.count > Self.maxSparklinePoints {
+            sparklineHistory.removeFirst()
+        }
+        lock.unlock()
+    }
+
     // MARK: - Shared Pricing
 
     struct ModelPricing {

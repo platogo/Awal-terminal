@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use crate::acp::protocol::{
     ContentBlock, JsonRpcRequest, JsonRpcResponseOut, SessionCancelParams,
-    SessionCancelSubagentParams, SessionNewParams, SessionPromptParams, SessionResumeParams,
-    SessionRewindParams, TextContent,
+    SessionCancelSubagentParams, SessionCloseParams, SessionListParams, SessionNewParams,
+    SessionPromptParams, SessionResumeParams, SessionRewindParams, TextContent,
 };
 use crate::acp::reader::AcpEvent;
 
@@ -24,6 +25,8 @@ pub struct AcpClient {
     stdin: std::io::BufWriter<Box<dyn Write + Send>>,
     rx: mpsc::Receiver<AcpEvent>,
     pending_methods: Arc<Mutex<HashMap<u64, String>>>,
+    incoming_id_map: Arc<Mutex<HashMap<u64, serde_json::Value>>>,
+    next_incoming_id: Arc<AtomicU64>,
     tx: mpsc::Sender<AcpEvent>,
     next_id: u64,
     session_id: Option<String>,
@@ -32,6 +35,7 @@ pub struct AcpClient {
     resume_session_id: Option<String>,
     crash_count: u8,
     max_retries: u8,
+    pub pending_config_options: Option<String>,
 }
 
 impl AcpClient {
@@ -41,11 +45,15 @@ impl AcpClient {
         let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd) };
         let (tx, rx) = mpsc::channel();
         let pending_methods = Arc::new(Mutex::new(HashMap::new()));
+        let incoming_id_map = Arc::new(Mutex::new(HashMap::new()));
+        let next_incoming_id = Arc::new(AtomicU64::new(1));
 
         let mut client = Self {
             stdin: std::io::BufWriter::new(Box::new(stdin_file)),
             rx,
             pending_methods,
+            incoming_id_map,
+            next_incoming_id,
             tx,
             next_id: 0,
             session_id: None,
@@ -53,7 +61,8 @@ impl AcpClient {
             cwd: String::new(),
             resume_session_id: None,
             crash_count: 0,
-            max_retries: 0,
+            max_retries: 3,
+            pending_config_options: None,
         };
         client.send_initialize()?;
         Ok(client)
@@ -62,8 +71,22 @@ impl AcpClient {
     /// Feed a line from stdout (called by Swift when it reads a line).
     pub fn feed_stdout_line(&mut self, line: &str) {
         use crate::acp::reader::parse_line;
-        if let Some(event) = parse_line(line, &self.pending_methods) {
+        if let Some(event) = parse_line(
+            line,
+            &self.pending_methods,
+            &self.incoming_id_map,
+            &self.next_incoming_id,
+        ) {
             self.handle_state_transition(&event);
+            // If session/new returned config_options, move from sentinel to dedicated field
+            if matches!(event, AcpEvent::SessionCreated(_)) {
+                if let Ok(mut map) = self.pending_methods.lock() {
+                    if let Some(json) = map.remove(&u64::MAX) {
+                        self.pending_config_options = Some(json.clone());
+                        let _ = self.tx.send(AcpEvent::ConfigOptionsReceived(json));
+                    }
+                }
+            }
             let _ = self.tx.send(event);
         }
     }
@@ -149,6 +172,50 @@ impl AcpClient {
         )
     }
 
+    /// Send session/close notification before destroying the client.
+    pub fn send_close(&mut self) -> Result<(), String> {
+        let session_id = match self.session_id.clone() {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let params = SessionCloseParams { session_id };
+        self.send_notification(
+            "session/close",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
+    /// Send session/set_config_option request.
+    pub fn send_set_config_option(&mut self, config_id: &str, value: &str) -> Result<(), String> {
+        let session_id = self
+            .session_id
+            .clone()
+            .ok_or("No active session".to_string())?;
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "configId": config_id,
+            "value": value,
+        });
+        self.send_request("session/set_config_option", Some(params))
+    }
+
+    /// Send _session/terminate notification for subagent termination.
+    pub fn send_terminate_session(&mut self, session_id: &str) -> Result<(), String> {
+        let params = serde_json::json!({ "sessionId": session_id });
+        self.send_notification("_session/terminate", Some(params))
+    }
+
+    /// Request the list of available sessions.
+    pub fn send_list_sessions(&mut self) -> Result<(), String> {
+        let params = SessionListParams {
+            cwd: self.cwd.clone(),
+        };
+        self.send_request(
+            "session/list",
+            Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+        )
+    }
+
     /// Force-kill the child process (hard termination).
     pub fn force_kill(&mut self) {
         self.state = AcpState::Dead;
@@ -177,9 +244,10 @@ impl AcpClient {
         request_id: u64,
         approved: bool,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = JsonRpcResponseOut {
             jsonrpc: "2.0",
-            id: request_id,
+            id,
             result: Some(serde_json::json!({ "approved": approved })),
             error: None,
         };
@@ -192,16 +260,17 @@ impl AcpClient {
         request_id: u64,
         content: Result<String, String>,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = match content {
             Ok(text) => JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: Some(serde_json::json!({ "content": text })),
                 error: None,
             },
             Err(msg) => JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: None,
                 error: Some(crate::acp::protocol::JsonRpcErrorOut {
                     code: -32000,
@@ -219,17 +288,18 @@ impl AcpClient {
         success: bool,
         error: Option<String>,
     ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
         let resp = if success {
             JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: Some(serde_json::json!({ "success": true })),
                 error: None,
             }
         } else {
             JsonRpcResponseOut {
                 jsonrpc: "2.0",
-                id: request_id,
+                id,
                 result: None,
                 error: Some(crate::acp::protocol::JsonRpcErrorOut {
                     code: -32000,
@@ -240,7 +310,50 @@ impl AcpClient {
         self.write_response(&resp)
     }
 
+    /// Send an arbitrary JSON result for a server-to-client request.
+    pub fn respond_json(&mut self, request_id: u64, result_json: &str) -> Result<(), String> {
+        let result: serde_json::Value =
+            serde_json::from_str(result_json).map_err(|e| e.to_string())?;
+        let id = self.resolve_original_id(request_id);
+        let resp = JsonRpcResponseOut {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    /// Send a JSON-RPC error response for a server-to-client request.
+    pub fn respond_error(
+        &mut self,
+        request_id: u64,
+        code: i64,
+        message: &str,
+    ) -> Result<(), String> {
+        let id = self.resolve_original_id(request_id);
+        let resp = JsonRpcResponseOut {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(crate::acp::protocol::JsonRpcErrorOut {
+                code,
+                message: message.to_string(),
+            }),
+        };
+        self.write_response(&resp)
+    }
+
     // --- Private ---
+
+    /// Resolve an internal u64 request ID back to the original JSON-RPC ID value.
+    fn resolve_original_id(&self, request_id: u64) -> serde_json::Value {
+        self.incoming_id_map
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(&request_id))
+            .unwrap_or_else(|| serde_json::Value::Number(request_id.into()))
+    }
 
     fn write_response(&mut self, resp: &JsonRpcResponseOut) -> Result<(), String> {
         let line = serde_json::to_string(resp).map_err(|e| e.to_string())?;
@@ -254,7 +367,7 @@ impl AcpClient {
     fn send_initialize(&mut self) -> Result<(), String> {
         let params = serde_json::json!({
             "protocolVersion": 1,
-            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+            "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": true },
             "clientInfo": { "name": "AwalTerminal", "version": env!("CARGO_PKG_VERSION") }
         });
         self.send_request("initialize", Some(params))

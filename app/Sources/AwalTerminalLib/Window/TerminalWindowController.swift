@@ -22,6 +22,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     private var periodicSaveTimer: Timer?
     private var toolCallStack: ToolCallStackView?
     private var pendingFsWrites: [UInt64: (path: String, content: String)] = [:]
+    private let acpTerminalManager = ACPTerminalManager()
     private var acpTimeoutTimer: DispatchSourceTimer?
 
     /// Exposed for keyboard shortcut interception from TerminalView.
@@ -526,12 +527,14 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
 
         if closingActiveTab {
             // Uninstall the tab being closed with cleanup
+            tabs[index].acpClient?.destroy()
             uninstallTab(tabs[index], cleanup: true)
             tabs.remove(at: index)
             activeTabIndex = min(index, tabs.count - 1)
             installTab(activeTab)
         } else {
             // Closing a background tab — cleanup its terminals
+            tabs[index].acpClient?.destroy()
             tabs[index].splitContainer.cleanupAllTerminals()
             tabs.remove(at: index)
             // Adjust activeTabIndex if the removed tab was before it
@@ -2333,8 +2336,10 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
     func windowWillClose(_ notification: Notification) {
         debounceSaveTimer?.invalidate()
         periodicSaveTimer?.invalidate()
+        acpTerminalManager.releaseAll()
         // Cleanup all tabs before window closes
         for tab in tabs {
+            tab.acpClient?.destroy()
             tab.splitContainer.cleanupAllTerminals()
             cleanupWorktree(for: tab, force: false)
         }
@@ -2507,14 +2512,11 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         wireACPCallbacks(client, tab: tab)
         let config = AppConfig.shared
         let engine = config.kiroAgentEngine
-        let trustTools: String? = config.kiroTrustLevel == .all
-            ? "all"
-            : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
         let tokenPath = config.resolvedKiroTokenPath
         let acpBinary = config.resolvedKiroACPBinaryPath
-        debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") trust=\(trustTools ?? "safe") token=\(tokenPath ?? "nil")")
+        debugLog("ACP: spawning acpBinary=\(acpBinary) cwd=\(cwd) engine=\(engine ?? "default") token=\(tokenPath ?? "nil")")
         let agent = config.kiroDefaultAgent ?? "master"
-        if client.spawn(kiroPath: acpBinary, cwd: cwd, agent: agent, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+        if client.spawn(kiroPath: acpBinary, cwd: cwd, agent: agent, engine: engine, trustTools: nil, tokenPath: tokenPath) {
             debugLog("ACP: spawn succeeded")
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
@@ -2525,7 +2527,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 guard let self, let tab else { return }
                 debugLog("ACP: initialization timeout (30s)")
                 self.acpTimeoutTimer = nil
-                self.fallbackToPTY(tab: tab, message: "ACP: Connection timed out — switching to PTY mode")
+                self.showACPError(tab: tab, message: "ACP: Connection timed out")
             }
             timer.resume()
             acpTimeoutTimer = timer
@@ -2548,12 +2550,9 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         wireACPCallbacks(client, tab: tab)
         let config = AppConfig.shared
         let engine = config.kiroAgentEngine
-        let trustTools: String? = config.kiroTrustLevel == .all
-            ? "all"
-            : config.kiroTrustedTools.isEmpty ? nil : config.kiroTrustedTools.joined(separator: ",")
         let tokenPath = config.resolvedKiroTokenPath
         let acpBinary = config.resolvedKiroACPBinaryPath
-        if client.spawnAndResume(kiroPath: acpBinary, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: trustTools, tokenPath: tokenPath) {
+        if client.spawnAndResume(kiroPath: acpBinary, cwd: cwd, sessionId: sessionId, engine: engine, trustTools: nil, tokenPath: tokenPath) {
             tab.acpClient = client
             tab.statusBar.setSessionMode("ACP")
         } else {
@@ -2653,6 +2652,35 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
         terminal.launchSessionDirect(model: model, workingDir: dir, commandOverride: model.command)
     }
 
+    private func attemptACPReconnect(tab: TabState, sessionId: String) {
+        tab.acpReconnectCount += 1
+        if tab.acpReconnectCount > 3 {
+            showACPError(tab: tab, message: "ACP: Failed to reconnect after 3 attempts")
+            return
+        }
+        feedToSurface(tab: tab, text: "\u{1b}[2m\u{21BB} Reconnecting (attempt \(tab.acpReconnectCount)/3)...\u{1b}[0m\n")
+        let config = AppConfig.shared
+        let kiroPath = config.resolvedKiroACPBinaryPath
+        let cwd = tab.acpProjectPath ?? tab.statusBar.currentPath ?? "."
+        tab.acpClient?.destroy()
+        let client = ACPClient()
+        wireACPCallbacks(client, tab: tab)
+        if client.spawnAndResume(kiroPath: kiroPath, cwd: cwd, sessionId: sessionId, engine: config.kiroAgentEngine, trustTools: nil, tokenPath: config.resolvedKiroTokenPath) {
+            tab.acpClient = client
+        } else {
+            showACPError(tab: tab, message: "ACP: Failed to spawn kiro-cli for reconnection")
+        }
+    }
+
+    private func showACPError(tab: TabState, message: String) {
+        tab.acpClient?.destroy()
+        tab.acpClient = nil
+        feedToSurface(tab: tab, text: "\r\n\u{1b}[1;31m\u{2717} \(message)\u{1b}[0m\r\n")
+        tab.chatInputView?.setEnabled(false)
+        tab.chatInputView?.setPlaceholder(message)
+        tab.statusBar.setSessionMode("ERR")
+    }
+
     private func feedToSurface(tab: TabState, text: String) {
         let terminal = tab.splitContainer.focusedTerminal
         guard let s = terminal.surface else {
@@ -2737,6 +2765,7 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             self?.acpTimeoutTimer = nil
             // Clear loading state on the terminal view
             if let tab {
+                tab.acpReconnectCount = 0
                 let terminal = tab.splitContainer.focusedTerminal
                 terminal.isWaitingForOutput = false
                 terminal.loadingMessageText = ""
@@ -2774,21 +2803,25 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
             guard let self, let tab else { return }
             self.acpTimeoutTimer?.cancel()
             self.acpTimeoutTimer = nil
-            self.fallbackToPTY(tab: tab, message: "ACP: Connection lost — switching to PTY mode")
+            self.showACPError(tab: tab, message: "ACP: Connection lost after 3 retries")
         }
         client.onProcessExited = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
             self.acpTimeoutTimer?.cancel()
             self.acpTimeoutTimer = nil
             self.toolCallStack?.clearAll()
-            self.fallbackToPTY(tab: tab, message: "ACP: Disconnected — switching to PTY mode")
+            if let sessionId = tab.acpClient?.sessionId {
+                self.attemptACPReconnect(tab: tab, sessionId: sessionId)
+            } else {
+                self.showACPError(tab: tab, message: "ACP session ended unexpectedly")
+            }
         }
         client.onAuthRequired = { [weak self, weak tab] msg in
             debugLog("ACP: auth required")
             guard let self, let tab else { return }
             self.acpTimeoutTimer?.cancel()
             self.acpTimeoutTimer = nil
-            self.fallbackToPTY(tab: tab, message: "Authentication required — launching Kiro in terminal mode")
+            self.showACPError(tab: tab, message: "Authentication required — run `kiro-cli login` in a terminal")
         }
         client.onToolCallStarted = { [weak self, weak tab] state in
             guard let self, let tab else { return }
@@ -2874,9 +2907,129 @@ class TerminalWindowController: NSWindowController, NSWindowDelegate, CustomTabB
                 self.feedToSurface(tab: subTab, text: "\r\n\u{1b}[1;31m✗ Error: \(message)\u{1b}[0m\r\n")
             }
         }
+        client.onMetadataUpdate = { [weak tab] pct, credits in
+            guard let tab else { return }
+            tab.aiSidePanel.updateContextBarDirect(percentage: pct)
+            if let credits {
+                tab.tokenTracker.addCredits(credits)
+                tab.aiSidePanel.updateTokenDisplay(
+                    input: tab.tokenTracker.currentInput,
+                    output: tab.tokenTracker.totalOutput
+                )
+            }
+        }
+        client.onSessionInfoUpdate = { [weak self, weak tab] title in
+            guard let self, let tab else { return }
+            tab.customTitle = title
+            self.reloadTabBar()
+        }
+        client.onCompactionStatus = { [weak self, weak tab] status in
+            guard let self, let tab else { return }
+            if status == "in_progress" {
+                self.feedToSurface(tab: tab, text: "\r\n\u{1b}[2;33m⟳ Context compacting…\u{1b}[0m\r\n")
+            } else if status == "completed" {
+                self.feedToSurface(tab: tab, text: "\r\n\u{1b}[2;32m✓ Context compacted\u{1b}[0m\r\n")
+            }
+        }
+        client.onSessionList = { [weak tab] json in
+            guard let tab else { return }
+            debugLog("ACP: session list received: \(json.prefix(200))")
+            // Parse and update resume UI
+            guard let data = json.data(using: .utf8) else { return }
+            do {
+                let wrapper = try JSONDecoder().decode(SessionListWrapper.self, from: data)
+                let sessions = wrapper.sessions.map { entry in
+                    let dateStr = entry.updatedAt ?? entry.createdAt
+                    let date = dateStr.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    return SessionManager.SessionInfo(
+                        id: entry.sessionId, model: "Kiro",
+                        projectPath: tab.statusBar.currentPath ?? "",
+                        startedAt: entry.createdAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? date,
+                        lastActiveAt: date,
+                        inputTokens: 0, outputTokens: 0, turns: 0, jsonlPath: nil
+                    )
+                }
+                tab.aiSidePanel.updateSessionHistory(sessions: sessions)
+            } catch {
+                debugLog("ACP: failed to decode session list: \(error)")
+            }
+        }
+        client.onConfigOptions = { [weak tab] json in
+            tab?.configOptionsJson = json
+        }
+        client.onAvailableCommands = { [weak tab] json in
+            tab?.availableCommandsJson = json
+        }
+        client.onMcpOAuthRequest = { [weak self] url in
+            _ = self  // prevent unused warning
+            guard let nsUrl = URL(string: url),
+                  nsUrl.scheme == "https" || nsUrl.scheme == "http" else {
+                debugLog("ACP: ignoring MCP OAuth URL with non-HTTP scheme: \(url)")
+                return
+            }
+            NSWorkspace.shared.open(nsUrl)
+        }
+        client.onTerminalCreate = { [weak self, weak tab] requestId, _, command, args, env, cwd, byteLimit in
+            guard let self, let tab else { return }
+            if let terminalId = self.acpTerminalManager.create(command: command, args: args, env: env, cwd: cwd, outputByteLimit: byteLimit) {
+                tab.acpClient?.respondJson(requestId: requestId, json: "{\"terminalId\":\"\(terminalId)\"}")
+            } else {
+                tab.acpClient?.respondError(requestId: requestId, code: -32000, message: "Failed to create terminal")
+            }
+        }
+        client.onTerminalOutput = { [weak self, weak tab] requestId, terminalId in
+            guard let self, let tab, let result = self.acpTerminalManager.getOutput(terminalId: terminalId) else {
+                tab?.acpClient?.respondError(requestId: requestId, code: -32000, message: "Terminal not found")
+                return
+            }
+            var json = "{\"output\":\(Self.jsonEscape(result.output)),\"truncated\":\(result.truncated)"
+            if let exitCode = result.exitCode {
+                json += ",\"exitStatus\":{\"exitCode\":\(exitCode)}"
+            } else if let signal = result.signal {
+                json += ",\"exitStatus\":{\"signal\":\(signal)}"
+            }
+            json += "}"
+            tab.acpClient?.respondJson(requestId: requestId, json: json)
+        }
+        client.onTerminalWaitForExit = { [weak self, weak tab] requestId, terminalId in
+            guard let self else { return }
+            self.acpTerminalManager.waitForExit(terminalId: terminalId) { [weak tab] exitCode, signal in
+                var json = "{"
+                if let exitCode {
+                    json += "\"exitCode\":\(exitCode)"
+                } else {
+                    json += "\"exitCode\":null"
+                }
+                if let signal {
+                    json += ",\"signal\":\(signal)"
+                } else {
+                    json += ",\"signal\":null"
+                }
+                json += "}"
+                tab?.acpClient?.respondJson(requestId: requestId, json: json)
+            }
+        }
+        client.onTerminalKill = { [weak self, weak tab] requestId, terminalId in
+            guard let self else { return }
+            _ = self.acpTerminalManager.kill(terminalId: terminalId)
+            tab?.acpClient?.respondJson(requestId: requestId, json: "{}")
+        }
+        client.onTerminalRelease = { [weak self, weak tab] requestId, terminalId in
+            guard let self else { return }
+            _ = self.acpTerminalManager.release(terminalId: terminalId)
+            tab?.acpClient?.respondJson(requestId: requestId, json: "{}")
+        }
     }
 
     private var diffReviewPopover: NSPopover?
+
+    private static func jsonEscape(_ string: String) -> String {
+        guard let data = try? JSONEncoder().encode(string),
+              let json = String(data: data, encoding: .utf8) else {
+            return "\"\""
+        }
+        return json
+    }
 
     private func showDiffReview(requestId: UInt64, path: String, content: String, cwd: String) {
         // Dismiss existing diff review if any
@@ -3028,4 +3181,17 @@ private class ColorPanelHelper: NSObject {
     @objc func colorChanged(_ sender: NSColorPanel) {
         onChange(tabIndex, sender.color)
     }
+}
+
+// MARK: - ACP Session List Decoding
+
+private struct SessionListWrapper: Decodable {
+    let sessions: [SessionListEntry]
+}
+
+private struct SessionListEntry: Decodable {
+    let sessionId: String
+    let title: String?
+    let createdAt: String?
+    let updatedAt: String?
 }

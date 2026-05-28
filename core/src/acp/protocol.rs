@@ -77,6 +77,8 @@ pub struct SessionNewParams {
 #[serde(rename_all = "camelCase")]
 pub struct SessionNewResult {
     pub session_id: String,
+    #[serde(default)]
+    pub config_options: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -175,11 +177,46 @@ pub enum SessionUpdate {
         message: String,
     },
     UsageUpdate(agent_client_protocol_schema::UsageUpdate),
+    SessionInfoUpdate {
+        title: String,
+    },
+    ConfigOptionUpdate {
+        #[serde(rename = "configOptions")]
+        config_options: Value,
+    },
+    AvailableCommandsUpdate {
+        #[serde(rename = "availableCommands")]
+        available_commands: Value,
+    },
+    CurrentModeUpdate {
+        #[serde(rename = "currentModeId")]
+        current_mode_id: String,
+    },
     #[serde(other)]
     Unknown,
 }
 
 // --- Permission request (server-to-client) ---
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCloseParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListParams {
+    pub cwd: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListEntry {
+    pub session_id: String,
+    pub title: Option<String>,
+    pub created_at: Option<String>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -206,7 +243,7 @@ pub struct JsonRpcNotificationOut {
 #[derive(Serialize)]
 pub struct JsonRpcResponseOut {
     pub jsonrpc: &'static str,
-    pub id: u64,
+    pub id: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,7 +261,7 @@ pub struct JsonRpcErrorOut {
 /// A raw line from stdout can be either a response (has `id`) or a notification (has `method`, no `id`).
 #[derive(Deserialize)]
 pub struct RawMessage {
-    pub id: Option<u64>,
+    pub id: Option<Value>,
     pub method: Option<String>,
     pub result: Option<Value>,
     pub error: Option<JsonRpcError>,
